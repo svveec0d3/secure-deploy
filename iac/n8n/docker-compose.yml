@@ -1,18 +1,54 @@
 services:
   n8n:
+    # ── Image ─────────────────────────────────────────────────────────────────
     # Runtime always uses the immutable digest — never a mutable tag.
     # N8N_IMAGE_DIGEST is auto-populated by install.sh from the GitHub Release.
-    # To rollback: set N8N_IMAGE_DIGEST in .env to the digest of a previous release.
+    # To rollback: set N8N_IMAGE_DIGEST + N8N_IMAGE_VERSION in .env, then:
+    #   docker compose up -d
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC}/${REPOSITORY_NAME}/n8n-trusted@${N8N_IMAGE_DIGEST}
     restart: always
+
+    # ── Runtime Hardening ─────────────────────────────────────────────────────
+    # Prevent privilege escalation (setuid/setgid binaries have no effect)
+    security_opt:
+      - no-new-privileges:true
+
+    # Drop ALL Linux capabilities; n8n is a pure Node.js web app and needs none
+    cap_drop:
+      - ALL
+
+    # Read-only root filesystem — reduces attack surface and prevents persistence
+    read_only: true
+
+    # Ephemeral writable directories (in-memory, not persisted across restarts)
+    tmpfs:
+      - /tmp:mode=1777,size=128m
+      - /home/node/.cache:mode=0700,size=64m
+
+    # Run as the non-root node user shipped in the official n8n image (uid=1000)
+    user: "1000:1000"
+
+    # Resource limits — cap blast radius in the event of a compromise or runaway
+    pids_limit: 200
+    mem_limit: 1g
+    memswap_limit: 1g # disables swap (mem_limit == memswap_limit)
+    cpus: "1.0"
+
+    # ── Environment ───────────────────────────────────────────────────────────
     environment:
       - N8N_USER_MANAGEMENT_DISABLED=false
       - WEBHOOK_URL=http://${HOST_IP}:5678/
       - N8N_SECURE_COOKIE=false
+
+    # ── Network ───────────────────────────────────────────────────────────────
     ports:
       - 5678:5678
+
+    # ── Volumes ───────────────────────────────────────────────────────────────
+    # Named volume for persistent data; this is the only writable persistent path
     volumes:
       - n8n_storage:/home/node/.n8n
 
 volumes:
   n8n_storage:
+    driver: local
