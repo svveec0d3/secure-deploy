@@ -33,13 +33,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull n8n
+      - name: Pull and Export n8n image
         run: |
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
+          docker save n8nio/n8n:${{ env.N8N_VERSION }} -o n8n-image.tar
 
       - name: Run Trivy vulnerability scanner
         run: |
-          docker run --rm -u root -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
+          docker run --rm -v ${{ github.workspace }}:/workspace aquasecurity/trivy:latest image --input /workspace/n8n-image.tar --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed
 
       - name: Promote n8n to Trusted Source
         run: |
