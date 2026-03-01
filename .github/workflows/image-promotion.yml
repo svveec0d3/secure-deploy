@@ -102,8 +102,10 @@ jobs:
           IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
-          docker push $TRUSTED_IMAGE
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $TRUSTED_IMAGE | awk -F@ '{print $2}')
+          PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
+          echo "Push output: $PUSH_OUTPUT"
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
+          echo "GHCR digest: $DIGEST"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
       - name: Attest Build Provenance
@@ -146,8 +148,10 @@ jobs:
           IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
-          docker push $TRUSTED_IMAGE
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $TRUSTED_IMAGE | awk -F@ '{print $2}')
+          PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
+          echo "Push output: $PUSH_OUTPUT"
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
+          echo "GHCR digest: $DIGEST"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
       - name: Attest Build Provenance
