@@ -16,17 +16,21 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if gh CLI is installed
-if ! command -v gh &> /dev/null; then
-    echo "❌ GitHub CLI (gh) is not installed. It is required for verifying cryptographic image signatures."
-    echo "Please install it: https://github.com/cli/cli#installation"
-    exit 1
-fi
-
-# Ensure user is logged into gh
-if ! gh auth status &> /dev/null; then
-    echo "❌ You are not logged into the GitHub CLI. Please run 'gh auth login' to authenticate with your account so we can verify the image signatures safely."
-    exit 1
+# Check if provenance verification is possible
+VERIFY_PROVENANCE=false
+if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
+    VERIFY_PROVENANCE=true
+else
+    echo ""
+    echo "⚠️  Optional: Cryptographic provenance verification requires the GitHub CLI (gh) and login."
+    echo "   Install it at: https://github.com/cli/cli#installation"
+    read -p "   Skip provenance verification and continue anyway? (Y/n): " SKIP_VERIFY
+    SKIP_VERIFY=${SKIP_VERIFY:-Y}
+    if [[ "$SKIP_VERIFY" =~ ^[Nn]$ ]]; then
+        echo "Aborted. Please install and authenticate the GitHub CLI first."
+        exit 1
+    fi
+    echo "   ⚠️  Skipping provenance verification."
 fi
 
 # Detect Current Host IP
@@ -72,12 +76,16 @@ echo "🔐 Verifying Cryptographic Provenance & SBOM..."
 echo "---------------------------------------------"
 # This command verifies that the image was completely unaltered from our GitHub Actions CI/CD pipeline
 # It checks both the SLSA provenance and the SBOM attestation.
-if gh attestation verify oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted:latest -o svveec0d3; then
-    echo "✅ Image Signature and Provenance successfully verified!"
+if [ "$VERIFY_PROVENANCE" = true ]; then
+    if gh attestation verify oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted:latest -o svveec0d3; then
+        echo "✅ Image Signature and Provenance successfully verified!"
+    else
+        echo "❌ SECURITY ALERT: Image signature verification failed! The image might have been tampered with or did not originate from your trusted CI/CD pipeline."
+        echo "Deployment aborted."
+        exit 1
+    fi
 else
-    echo "❌ SECURITY ALERT: Image signature verification failed! The image might have been tampered with or did not originate from your trusted CI/CD pipeline."
-    echo "Deployment aborted."
-    exit 1
+    echo "   ⚠️  Provenance check skipped."
 fi
 
 echo "🚀 Deploying n8n container..."
