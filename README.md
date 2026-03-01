@@ -14,7 +14,18 @@ To ensure only trusted and secure images are deployed, we use a **Verification &
 2. **Scan**: [Trivy](https://github.com/aquasecurity/trivy) performs a security scan. 
    - **Gate**: The workflow fails if any **CRITICAL** or **HIGH** vulnerabilities are found.
 3. **Verify**: Integrity is checked via image digests. (Optional: Cosign provenance verification).
-4. **Push**: Verified images are pushed to GitHub Container Registry (GHCR) as your **Trusted Source**.
+
+### GitHub Actions Setup
+1. Go to your repository **Settings > Environments**.
+2. Click **New Environment** and name it `trusted-promotion`.
+3. Check the **Required reviewers** box and add yourself.
+4. Go to **Settings > Actions > General > Workflow permissions**.
+5. Ensure **Read and write permissions** is selected so the Action can push to GHCR.
+
+### Triggering the Pipeline
+1. Upon any push to `main` (or via manual `workflow_dispatch`), the pipeline triggers.
+2. The **Security Scan** job will run Trivy and upload a `trivy-vulnerability-report` Artifact. Download this from the Actions run summary to review existing Critical/High vulnerabilities.
+3. The **Manual Approval & Promotion** job will pause. Click **Review deployments** to approve or reject the push to your trusted GHCR registry based on your assessment of the attached report.
 
 ## How to Get Started
 

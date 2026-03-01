@@ -18,6 +18,8 @@ jobs:
   scan-images:
     name: Security Scan
     runs-on: ubuntu-latest
+    outputs:
+      is_vulnerable: ${{ steps.trivy-scan.outputs.is_vulnerable }}
     permissions:
       contents: read
     steps:
@@ -48,15 +50,47 @@ jobs:
             trivy-report.json
             trivy-summary.txt
 
-      - name: Fail pipeline if vulnerable
+      - name: Check for vulnerabilities
+        id: trivy-scan
         run: |
-          # Fails the pipeline to prevent unapproved continuation if there are HIGH or CRITICAL findings.
-          # The user must review the artifact and manually approve the next job.
-          trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }} || exit 0 # We exit 0 here so the workflow doesn't completely crash and skip the next job block. The actual gating happens in the Environment.
+          # Run Trivy and capture exit code
+          if trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}; then
+            echo "is_vulnerable=false" >> $GITHUB_OUTPUT
+            echo "No critical/high vulnerabilities found. Auto-promotion enabled."
+          else
+            echo "is_vulnerable=true" >> $GITHUB_OUTPUT
+            echo "Critical/High vulnerabilities found. Manual approval required."
+          fi
+          exit 0 # Always exit 0 so the workflow continues to the promotion jobs
 
-  promote-images:
-    name: Manual Approval & Promotion
+  promote-images-auto:
+    name: Auto Promotion (Clean Image)
     needs: scan-images
+    if: needs.scan-images.outputs.is_vulnerable == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and tag clean n8n
+        run: |
+          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
+          IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
+          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
+          docker tag $IMAGE_NAME $TRUSTED_IMAGE
+          docker push $TRUSTED_IMAGE
+
+  promote-images-manual:
+    name: Manual Approval Promotion (Vulnerable Image)
+    needs: scan-images
+    if: needs.scan-images.outputs.is_vulnerable == 'true'
     runs-on: ubuntu-latest
     environment: trusted-promotion
     permissions:
@@ -70,7 +104,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pulll and tag n8n
+      - name: Pull and tag vulnerable n8n
         run: |
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
           IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
