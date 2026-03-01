@@ -51,7 +51,7 @@ flowchart TD
     F --> G[KEV Cross‑Reference]
     G --> H{Result}
     H -->|Clean| I[Auto‑Promote]
-    H -->|Vuln / KEV| J[Manual Approval (trusted‑promotion)]
+    H -->|Vuln / KEV| J["Manual Approval (trusted‑promotion)"]
     I --> K[Attest Provenance & SBOM]
     J --> K
     K --> L[GitHub Release + Rollback Info]
