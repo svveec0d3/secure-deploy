@@ -22,10 +22,9 @@ jobs:
           sudo apt-get install -y wget apt-transport-https gnupg lsb-release
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          sudo apt-get update && sudo apt-get install -y trivy jq
 
-      - name: Scan repo for IaC misconfigurations and secrets
+      - name: Scan repo for IaC misconfigurations and secrets (blocks on findings)
         run: |
           trivy fs . \
             --scanners misconfig,secret \
@@ -33,3 +32,169 @@ jobs:
             --ignore-unfixed \
             --format table \
             --exit-code 1
+
+  cis-compliance-check:
+    name: CIS Docker Benchmark v1.6.0 Compliance Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install yq (YAML parser)
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check CIS Docker Benchmark v1.6.0 compliance
+        id: cis-check
+        run: |
+          COMPOSE="iac/n8n/docker-compose.yml"
+          POLICY="policy/runtime-hardening-policy.yml"
+          FAIL=false
+          REPORT=""
+
+          echo "==================================================="
+          echo " CIS Docker Benchmark v1.6.0 — Compliance Check"
+          echo " Policy file: $POLICY"
+          echo " Compose file: $COMPOSE"
+          echo "==================================================="
+
+          add_result() {
+            local id="$1" status="$2" msg="$3"
+            if [ "$status" = "PASS" ]; then
+              echo "  ✅ CIS $id — $msg"
+            else
+              echo "  ❌ CIS $id — $msg"
+              FAIL=true
+            fi
+            REPORT="${REPORT}\n${status}: CIS ${id} — ${msg}"
+          }
+
+          # CIS 5.1 — AppArmor profile
+          if grep -q "apparmor:docker-default" "$COMPOSE"; then
+            add_result "5.1" "PASS" "AppArmor profile applied (apparmor:docker-default)"
+          else
+            add_result "5.1" "FAIL" "AppArmor profile missing from security_opt"
+          fi
+
+          # CIS 5.2 — cap_drop: ALL
+          if grep -q "cap_drop" "$COMPOSE" && grep -A2 "cap_drop" "$COMPOSE" | grep -q "ALL"; then
+            add_result "5.2" "PASS" "All capabilities dropped (cap_drop: ALL)"
+          else
+            add_result "5.2" "FAIL" "cap_drop: ALL is missing — capabilities are not restricted"
+          fi
+
+          # CIS 5.3 — No privileged mode
+          if ! grep -q "privileged: true" "$COMPOSE"; then
+            add_result "5.3" "PASS" "Privileged mode not set"
+          else
+            add_result "5.3" "FAIL" "privileged: true is set — remove immediately"
+          fi
+
+          # CIS 5.4 / 5.31 — No sensitive mounts or docker.sock
+          if grep -q "volumes:" "$COMPOSE"; then
+            SENSITIVE_MOUNTS=$(grep -E "(docker\.sock|/etc:|/proc:|/sys:|/dev:)" "$COMPOSE" || true)
+            if [ -z "$SENSITIVE_MOUNTS" ]; then
+              add_result "5.4/5.31" "PASS" "No sensitive host paths or docker.sock mounted"
+            else
+              add_result "5.4/5.31" "FAIL" "Sensitive mount detected: $SENSITIVE_MOUNTS"
+            fi
+          else
+            add_result "5.4/5.31" "PASS" "No volumes defined"
+          fi
+
+          # CIS 5.7 — No privileged ports (< 1024)
+          PRIV_PORT=$(grep -oP ':\d+:' "$COMPOSE" | grep -oP '\d+' | awk '$1 < 1024' || true)
+          if [ -z "$PRIV_PORT" ]; then
+            add_result "5.7" "PASS" "No privileged ports mapped (ports < 1024)"
+          else
+            add_result "5.7" "FAIL" "Privileged port mapped: $PRIV_PORT"
+          fi
+
+          # CIS 5.10 — mem_limit set
+          if grep -q "mem_limit" "$COMPOSE"; then
+            add_result "5.10" "PASS" "Memory limit is set"
+          else
+            add_result "5.10" "FAIL" "mem_limit is not set — container can exhaust host memory"
+          fi
+
+          # CIS 5.11 — cpus set
+          if grep -q "cpus" "$COMPOSE"; then
+            add_result "5.11" "PASS" "CPU limit is set"
+          else
+            add_result "5.11" "FAIL" "cpus is not set — container can monopolise host CPU"
+          fi
+
+          # CIS 5.12 — read_only root FS
+          if grep -q "read_only: true" "$COMPOSE"; then
+            add_result "5.12" "PASS" "Root filesystem is read-only"
+          else
+            add_result "5.12" "FAIL" "read_only: true is missing — root filesystem is writable"
+          fi
+
+          # CIS 5.13 — Not binding to 0.0.0.0
+          if grep -E "ports:" "$COMPOSE" | grep -qE '"0\.0\.0\.0:|^- 0\.0\.0\.0:'; then
+            add_result "5.13" "FAIL" "Port is bound to 0.0.0.0 — should bind to specific interface"
+          else
+            add_result "5.13" "PASS" "Port binding is interface-scoped (not 0.0.0.0)"
+          fi
+
+          # CIS 5.14 — Restart policy is on-failure:N
+          if grep -q "on-failure" "$COMPOSE"; then
+            add_result "5.14" "PASS" "Restart policy is on-failure (not always)"
+          else
+            add_result "5.14" "FAIL" "Restart policy should be on-failure:N, not 'always' or 'unless-stopped'"
+          fi
+
+          # CIS 5.18 — ulimits set
+          if grep -q "ulimits" "$COMPOSE"; then
+            add_result "5.18" "PASS" "ulimits are configured"
+          else
+            add_result "5.18" "FAIL" "ulimits not set — file descriptor limits are unconstrained"
+          fi
+
+          # CIS 5.21 — Default seccomp not disabled
+          if grep -q "seccomp:unconfined" "$COMPOSE"; then
+            add_result "5.21" "FAIL" "seccomp:unconfined is set — default seccomp profile is disabled"
+          else
+            add_result "5.21" "PASS" "Default seccomp profile is active (not disabled)"
+          fi
+
+          # CIS 5.25 — no-new-privileges
+          if grep -q "no-new-privileges:true" "$COMPOSE"; then
+            add_result "5.25" "PASS" "no-new-privileges is set"
+          else
+            add_result "5.25" "FAIL" "no-new-privileges:true is missing from security_opt"
+          fi
+
+          # CIS 5.28 — pids_limit set
+          if grep -q "pids_limit" "$COMPOSE"; then
+            add_result "5.28" "PASS" "PIDs cgroup limit (pids_limit) is set"
+          else
+            add_result "5.28" "FAIL" "pids_limit is not set — fork bombs are unconstrained"
+          fi
+
+          # CIS 5.29 — Custom network (not implicit default)
+          if grep -q "networks:" "$COMPOSE" && ! grep -q "network_mode: host" "$COMPOSE"; then
+            add_result "5.29" "PASS" "Custom network defined (not docker0 default bridge)"
+          else
+            add_result "5.29" "FAIL" "No custom network defined — container may be on the default docker0 bridge"
+          fi
+
+          echo ""
+          echo "==================================================="
+          if [ "$FAIL" = true ]; then
+            echo "❌ CIS COMPLIANCE CHECK FAILED — see violations above"
+            echo "   Fix the docker-compose.yml issues and push again."
+            echo "   Policy reference: $POLICY"
+          else
+            echo "✅ All automated CIS Docker Benchmark v1.6.0 checks PASSED"
+          fi
+          echo "==================================================="
+
+          echo "cis_pass=$([ "$FAIL" = false ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+          # Fail the step so CI blocks the PR/merge
+          [ "$FAIL" = false ]

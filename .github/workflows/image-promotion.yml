@@ -39,8 +39,8 @@ jobs:
 
       - name: Enforce Source Allowlist (Policy-as-Code)
         run: |
-          ALLOWED_IMAGE=$(grep 'source_image:' policy/promotion-policy.yml | awk '{print $2}' | tr -d '"')
-          TAG_PATTERN=$(grep 'tag_pattern:' policy/promotion-policy.yml | awk '{print $2}' | tr -d '"')
+          ALLOWED_IMAGE=$(grep 'source_image:' policy/image-ingestion-policy.yml | awk '{print $2}' | tr -d '"')
+          TAG_PATTERN=$(grep 'tag_pattern:' policy/image-ingestion-policy.yml | awk '{print $2}' | tr -d '"')
           REQUESTED_VERSION="${{ env.N8N_VERSION }}"
 
           echo "Policy: allowed source = $ALLOWED_IMAGE"
@@ -75,11 +75,11 @@ jobs:
           else
             echo "⚠️  VENDOR RISK GAP: n8nio/n8n does not publish Sigstore/cosign signatures." >> vendor-sig-check.txt
             echo "   Publisher identity cannot be cryptographically verified upstream." >> vendor-sig-check.txt
-            echo "   Mitigations in place (per policy/promotion-policy.yml):" >> vendor-sig-check.txt
+            echo "   Mitigations in place (per policy/image-ingestion-policy.yml):" >> vendor-sig-check.txt
             echo "   - Source allowlisted to n8nio/n8n only" >> vendor-sig-check.txt
             echo "   - Strict semver tag enforcement (no moving targets)" >> vendor-sig-check.txt
             echo "   - Immutable SHA256 digest pinning throughout pipeline" >> vendor-sig-check.txt
-            echo "   Accepted risk: see policy/promotion-policy.yml vendor_signature.accepted_risk" >> vendor-sig-check.txt
+            echo "   Accepted risk: see policy/image-ingestion-policy.yml vendor_signature.accepted_risk" >> vendor-sig-check.txt
           fi
           cat vendor-sig-check.txt
 
