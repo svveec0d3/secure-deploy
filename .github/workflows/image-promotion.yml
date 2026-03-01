@@ -38,9 +38,15 @@ jobs:
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
           docker save n8nio/n8n:${{ env.N8N_VERSION }} -o n8n-image.tar
 
-      - name: Run Trivy vulnerability scanner
+      - name: Install and Run Trivy
         run: |
-          docker run --rm -v ${{ github.workspace }}:/workspace aquasecurity/trivy:latest image --input /workspace/n8n-image.tar --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+          trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
 
       - name: Promote n8n to Trusted Source
         run: |
