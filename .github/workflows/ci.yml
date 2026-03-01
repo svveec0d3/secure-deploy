@@ -24,14 +24,64 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy jq
 
-      - name: Scan repo for IaC misconfigurations and secrets (blocks on findings)
+      - name: Scan repo — IaC misconfigurations and secrets
+        id: trivy-scan
         run: |
+          # Generate JSON report for artifact (always saved, even on failure)
+          trivy fs . \
+            --scanners misconfig,secret \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-iac-report.json \
+            --exit-code 0   # don't exit here — gate below handles it
+
+          # Generate human-readable table for the Job Summary
           trivy fs . \
             --scanners misconfig,secret \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
             --format table \
-            --exit-code 1
+            --output trivy-iac-summary.txt \
+            --exit-code 0
+
+          # Write to GitHub Actions Job Summary (visible on the PR checks page)
+          echo "## 🔍 IaC Misconfiguration & Secret Scan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scope:** \`CRITICAL\`, \`HIGH\` — unfixed only" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat trivy-iac-summary.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          # Count findings for gate decision
+          FINDINGS=$(jq '[.Results[]?.Misconfigurations//[], .Results[]?.Secrets//[]] | flatten | length' trivy-iac-report.json 2>/dev/null || echo 0)
+          echo "findings=$FINDINGS" >> $GITHUB_OUTPUT
+
+          if [ "$FINDINGS" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **$FINDINGS finding(s) detected — download \`trivy-iac-report\` artifact for full details.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **No CRITICAL/HIGH findings detected.**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload IaC Scan Report (always available, even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-iac-report
+          path: |
+            trivy-iac-report.json
+            trivy-iac-summary.txt
+
+      - name: Gate — block merge if findings detected
+        if: steps.trivy-scan.outputs.findings != '0'
+        run: |
+          echo "❌ Trivy found CRITICAL/HIGH misconfigurations or secrets."
+          echo "   Download the 'trivy-iac-report' artifact from this run for details."
+          echo "   Fix all findings in the source files and push again."
+          exit 1
 
   cis-compliance-check:
     name: CIS Docker Benchmark v1.6.0 Compliance Check
@@ -194,7 +244,54 @@ jobs:
           fi
           echo "==================================================="
 
-          echo "cis_pass=$([ "$FAIL" = false ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          # Write structured report file for artifact upload
+          echo "CIS Docker Benchmark v1.6.0 Compliance Report" > cis-compliance-report.txt
+          echo "Target: $COMPOSE" >> cis-compliance-report.txt
+          echo "Policy: $POLICY" >> cis-compliance-report.txt
+          echo "Date: $(date -u)" >> cis-compliance-report.txt
+          echo "" >> cis-compliance-report.txt
+          echo -e "$REPORT" >> cis-compliance-report.txt
 
-          # Fail the step so CI blocks the PR/merge
-          [ "$FAIL" = false ]
+          # Write to GitHub Actions Job Summary (visible on the PR checks page)
+          echo "## 🛡️ CIS Docker Benchmark v1.6.0 Compliance" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`$COMPOSE\`  **Policy:** \`$POLICY\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Result | Control | Detail |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          while IFS= read -r line; do
+            if echo "$line" | grep -q "^PASS:"; then
+              DETAIL="${line#PASS: }"
+              echo "| ✅ PASS | $DETAIL |" >> $GITHUB_STEP_SUMMARY
+            elif echo "$line" | grep -q "^FAIL:"; then
+              DETAIL="${line#FAIL: }"
+              echo "| ❌ **FAIL** | **$DETAIL** |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done < cis-compliance-report.txt
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "cis_pass=$([ "$FAIL" = false ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "cis_fail=$FAIL" >> $GITHUB_OUTPUT
+
+          if [ "$FAIL" = true ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Compliance check FAILED — download the \`cis-compliance-report\` artifact for the full list of violations to fix.**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **All checks passed.**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload CIS Compliance Report (always available, even on failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cis-compliance-report
+          path: cis-compliance-report.txt
+
+      - name: Gate — block merge if CIS violations detected
+        if: steps.cis-check.outputs.cis_fail == 'true'
+        run: |
+          echo "❌ CIS Docker Benchmark v1.6.0 compliance check FAILED."
+          echo "   Download the 'cis-compliance-report' artifact from this run."
+          echo "   Fix all ❌ FAIL items in iac/n8n/docker-compose.yml and push again."
+          echo "   Reference: policy/cis-docker-hardening.md"
+          exit 1
