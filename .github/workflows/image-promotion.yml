@@ -1,12 +1,18 @@
 name: Image Promotion (Trusted Source)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       n8n_version:
         description: 'n8n version to pull'
         default: 'latest'
-        required: true
+        required: false
+
+env:
+  N8N_VERSION: ${{ github.event.inputs.n8n_version || 'latest' }}
 
 jobs:
   promote-images:
@@ -29,12 +35,12 @@ jobs:
 
       - name: Pull n8n
         run: |
-          docker pull n8nio/n8n:${{ github.event.inputs.n8n_version }}
+          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'n8nio/n8n:${{ github.event.inputs.n8n_version }}'
+          image-ref: 'n8nio/n8n:${{ env.N8N_VERSION }}'
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
@@ -43,7 +49,7 @@ jobs:
 
       - name: Promote n8n to Trusted Source
         run: |
-          IMAGE_NAME="n8nio/n8n:${{ github.event.inputs.n8n_version }}"
-          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ github.event.inputs.n8n_version }}"
+          IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
+          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
           docker push $TRUSTED_IMAGE
