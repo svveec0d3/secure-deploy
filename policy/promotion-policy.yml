@@ -2,33 +2,84 @@
 # Changes to this file must go through a Pull Request for auditability.
 # The image-promotion pipeline reads and enforces these rules dynamically.
 
+# ─── CIS DOCKER BENCHMARK COMPLIANCE ────────────────────────────────────────
+# Reference: CIS Docker Benchmark v1.6.0 (2023-09-29)
+# Source:    https://www.cisecurity.org/benchmark/docker
+# Scope:     Section 5 — Container Runtime Configuration
+#            Applicable to all containers deployed via docker-compose.yml
+#
+# The following table maps each applicable CIS control to its implementation.
+# Status: COMPLIANT | NOT_APPLICABLE | ACCEPTED_RISK
+#
+# CIS ID  Status            Control Description                              Implementation
+# ──────  ────────────────  ───────────────────────────────────────────────  ────────────────────────────────────────────
+# 5.1     COMPLIANT         AppArmor profile applied                         security_opt: apparmor:docker-default
+# 5.2     COMPLIANT         SELinux policies not disabled                    Not host SELinux — AppArmor used instead (Ubuntu)
+# 5.3     COMPLIANT         Do not use --privileged                          privileged key omitted (default false)
+# 5.4     COMPLIANT         Do not mount sensitive host directories          Only named volume n8n_storage mounted
+# 5.5     NOT_APPLICABLE    Do not use --net=host                            Custom bridge network enforced (n8n_net)
+# 5.7     COMPLIANT         Do not map privileged ports (< 1024)             Port 5678 is unprivileged
+# 5.9     NOT_APPLICABLE    Do not share host network namespace              network_mode: host not used
+# 5.10    COMPLIANT         Limit memory usage                               mem_limit via ${MEM_LIMIT} (default 1g)
+# 5.11    COMPLIANT         Limit CPU usage                                  cpus via ${CPU_LIMIT} (default 1.0)
+# 5.12    COMPLIANT         Mount root FS as read-only                       read_only: true
+# 5.13    COMPLIANT         Bind to specific host interface                  ports: ${HOST_IP}:5678:5678
+# 5.14    COMPLIANT         Use on-failure restart policy with count limit   restart: on-failure:5
+# 5.15    NOT_APPLICABLE    Do not share host process namespace              pid: host not used
+# 5.16    NOT_APPLICABLE    Do not share host IPC namespace                  ipc: host not used
+# 5.17    NOT_APPLICABLE    Do not expose host device files                  devices: key not used
+# 5.18    COMPLIANT         Set ulimits to restrict file descriptors         ulimits: nofile soft=1024 hard=4096
+# 5.20    NOT_APPLICABLE    Do not share host UTS namespace                  uts: host not used
+# 5.21    COMPLIANT         Do not disable default seccomp profile           seccomp:unconfined is NOT set
+# 5.23    NOT_APPLICABLE    Do not share host process namespace via pid      pid: host not used
+# 5.24    NOT_APPLICABLE    Confirm no docker.sock mount                     volumes contain no docker.sock
+# 5.25    COMPLIANT         Restrict privilege escalation                    security_opt: no-new-privileges:true
+# 5.27    NOT_APPLICABLE    Do not expose host devices                       devices: key absent
+# 5.28    COMPLIANT         Use PIDs cgroup limit                            pids_limit via ${PIDS_LIMIT} (default 200)
+# 5.29    COMPLIANT         Do not use docker0 default bridge                Custom network: n8n_net (bridge)
+# 5.30    NOT_APPLICABLE    Do not share host user namespace                 userns_mode not set (isolated default)
+# 5.31    COMPLIANT         Do not mount Docker socket inside containers     docker.sock absent from all volume mounts
+#
+# Controls NOT LISTED: covered at host level (daemon config, OS hardening) — outside scope of this compose file.
+
+cis_docker_benchmark:
+  version: "1.6.0"
+  release_date: "2023-09-29"
+  scope: "Section 5 — Container Runtime Configuration"
+  compose_file: "iac/n8n/docker-compose.yml"
+
 # ─── ALLOWLIST ──────────────────────────────────────────────────────────────
-# Only images from this upstream source may be ingested.
 allowlist:
   source_image: "n8nio/n8n"
-  # Tags must match strict semver (x.y.z). Moving targets like 'latest',
-  # 'stable', or 'nightly' are resolved to a concrete semver first.
   tag_pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
 
 # ─── BLOCK RULES ────────────────────────────────────────────────────────────
-# Images matching ANY of these conditions are blocked from auto-promotion.
-# They require explicit manual approval via the 'trusted-promotion' environment.
 block_on:
   - condition: "critical_or_high_cve"
     description: "Any unfixed CVE with CRITICAL or HIGH severity"
   - condition: "kev_match"
     description: "Any CVE (any severity) present in the CISA Known Exploited Vulnerabilities catalogue"
 
+  # CIS-derived runtime gate checks (evaluated at promotion time via compose schema validation)
+  - condition: "privileged_mode"
+    description: "CIS 5.3 — Container must not run with privileged: true"
+  - condition: "host_network"
+    description: "CIS 5.5/5.9 — Container must not use network_mode: host"
+  - condition: "host_pid_ipc_uts"
+    description: "CIS 5.15/5.16/5.20 — Container must not share host pid/ipc/uts namespaces"
+  - condition: "docker_socket_mount"
+    description: "CIS 5.24/5.31 — Docker socket must not be mounted inside the container"
+  - condition: "root_filesystem_writable"
+    description: "CIS 5.12 — Container root filesystem must be mounted read-only"
+  - condition: "capabilities_not_dropped"
+    description: "CIS 5.2 — All capabilities must be dropped; none re-added unless explicitly justified"
+
 # ─── ALLOW WITH EXCEPTION ───────────────────────────────────────────────────
-# Blocked images may be promoted only after human review via this environment.
 allow_with_exception:
   environment: "trusted-promotion"
   note: "Reviewer must download and assess the scan-report artifact before approving"
 
 # ─── VENDOR SIGNATURE POLICY ────────────────────────────────────────────────
-# If the vendor publishes Sigstore/cosign signatures, set to 'required'.
-# If the vendor does NOT publish signatures, set to 'warn' to log a risk gap
-# without blocking ingestion (document the accepted risk below).
 vendor_signature:
   mode: "warn"               # Options: required | warn | skip
   accepted_risk: |
