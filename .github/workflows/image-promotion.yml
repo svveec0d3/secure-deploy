@@ -1,9 +1,6 @@
 name: Image Promotion (Trusted Source)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       n8n_version:
