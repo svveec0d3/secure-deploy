@@ -1,6 +1,6 @@
 # Secure n8n Container Host Deployment
-![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)
-![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)
+[![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
+[![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 
 This repository manages the Infrastructure as Code (IaC) and Secure Supply Chain for deploying n8n on a container host.
 
