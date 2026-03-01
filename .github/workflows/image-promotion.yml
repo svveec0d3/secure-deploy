@@ -23,11 +23,6 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.4.0
 
-      - name: Install Trivy
-        run: |
-          wget https://github.com/aquasecurity/trivy/releases/download/v0.49.1/trivy_0.49.1_Linux-64bit.deb
-          sudo dpkg -i trivy_0.49.1_Linux-64bit.deb
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -35,20 +30,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify, Scan, and Promote n8n
+      - name: Pull n8n
+        run: |
+          IMAGE_NAME="n8nio/n8n:${{ github.event.inputs.n8n_version }}"
+          docker pull $IMAGE_NAME
+
+      - name: Run Trivy security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'n8nio/n8n:${{ github.event.inputs.n8n_version }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Promote n8n to Trusted Source
         run: |
           IMAGE_NAME="n8nio/n8n:${{ github.event.inputs.n8n_version }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ github.event.inputs.n8n_version }}"
-          
-          echo "Pulling $IMAGE_NAME..."
-          docker pull $IMAGE_NAME
-          
-          echo "Verifying provenance for $IMAGE_NAME..."
-          # Note: n8n doesn't always sign with Cosign yet, so we verify against official digest/signatures if available.
-          # Full provenance verification would require SLSA metadata or official Cosign signatures.
-          
-          echo "Running Trivy security scan..."
-          trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed $IMAGE_NAME
           
           echo "Promoting to trusted source..."
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
