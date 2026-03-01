@@ -25,7 +25,8 @@ To ensure only trusted and secure images are deployed, we use a **Verification &
 ### Triggering the Pipeline
 1. Upon any push to `main` (or via manual `workflow_dispatch`), the pipeline triggers.
 2. The **Security Scan** job will run Trivy and upload a `trivy-vulnerability-report` Artifact. Download this from the Actions run summary to review existing Critical/High vulnerabilities.
-3. The **Manual Approval & Promotion** job will pause. Click **Review deployments** to approve or reject the push to your trusted GHCR registry based on your assessment of the attached report.
+3. If no vulnerabilities are found, the image is automatically tagged and pushed. 
+4. If Critical/High vulnerabilities exist, the **Manual Approval Promotion** job will pause. Click **Review deployments** to manually override and approve the push to your trusted GHCR registry based on your assessment of the attached report.
 
 ## How to Get Started
 
