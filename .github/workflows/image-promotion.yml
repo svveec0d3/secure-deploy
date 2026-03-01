@@ -4,11 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       n8n_version:
-        description: 'n8n version to pull (e.g. 1.55.3 — never use latest)'
-        required: true
+        description: 'n8n version to pull (e.g. 1.55.3) — enter "latest" to auto-resolve'
+        required: false
+        default: 'latest'
 
 env:
-  N8N_VERSION: ${{ github.event.inputs.n8n_version }}
+  N8N_VERSION: ${{ github.event.inputs.n8n_version || 'latest' }}
 
 jobs:
   scan-images:
@@ -35,21 +36,35 @@ jobs:
       - name: Fetch and pin image by digest
         id: fetch-digest
         run: |
+          # If 'latest' was entered, resolve the actual semantic version from Docker Hub
+          REQUESTED="${{ env.N8N_VERSION }}"
+          if [ "$REQUESTED" = "latest" ]; then
+            TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:n8nio/n8n:pull" | jq -r '.token')
+            RESOLVED=$(curl -s -H "Authorization: Bearer $TOKEN" \
+              "https://registry-1.docker.io/v2/n8nio/n8n/tags/list" | jq -r '.tags[]' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            echo "Resolved latest -> $RESOLVED"
+            echo "N8N_VERSION=$RESOLVED" >> $GITHUB_ENV
+            VERSION=$RESOLVED
+          else
+            VERSION="$REQUESTED"
+          fi
+
           # Resolve the exact SHA256 digest for this version tag from Docker Hub
           TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:n8nio/n8n:pull" | jq -r '.token')
           DIGEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "https://registry-1.docker.io/v2/n8nio/n8n/manifests/${{ env.N8N_VERSION }}" \
+            "https://registry-1.docker.io/v2/n8nio/n8n/manifests/$VERSION" \
             --head | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')
           if [ -z "$DIGEST" ]; then
-            echo "ERROR: Could not resolve digest for n8nio/n8n:${{ env.N8N_VERSION }}. Is the version valid?"
+            echo "ERROR: Could not resolve digest for n8nio/n8n:$VERSION. Is the version valid?"
             exit 1
           fi
-          echo "Pinned digest: $DIGEST"
+          echo "Pinned version: $VERSION @ $DIGEST"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           # Pull by immutable digest — guarantees what we scan is what we promote
           docker pull n8nio/n8n@$DIGEST
-          docker tag n8nio/n8n@$DIGEST n8nio/n8n:${{ env.N8N_VERSION }}
+          docker tag n8nio/n8n@$DIGEST n8nio/n8n:$VERSION
 
       - name: Scan for CVEs (non-blocking report)
         run: |
