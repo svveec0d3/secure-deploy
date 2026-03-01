@@ -7,12 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       n8n_version:
-        description: 'n8n version to pull'
-        default: 'latest'
-        required: false
+        description: 'n8n version to pull (e.g. 1.55.3 — never use latest)'
+        required: true
 
 env:
-  N8N_VERSION: ${{ github.event.inputs.n8n_version || 'latest' }}
+  N8N_VERSION: ${{ github.event.inputs.n8n_version }}
 
 jobs:
   scan-images:
@@ -20,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       is_vulnerable: ${{ steps.trivy-scan.outputs.is_vulnerable }}
+      image_digest: ${{ steps.fetch-digest.outputs.digest }}
     permissions:
       contents: read
     steps:
@@ -35,47 +35,91 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      - name: Pull Image with Digest Verification
+      - name: Fetch and pin image by digest
+        id: fetch-digest
         run: |
-          # Fetch the canonical digest for this tag from Docker Hub manifest API
+          # Resolve the exact SHA256 digest for this version tag from Docker Hub
           TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:n8nio/n8n:pull" | jq -r '.token')
           DIGEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
             "https://registry-1.docker.io/v2/n8nio/n8n/manifests/${{ env.N8N_VERSION }}" \
             --head | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')
-          echo "Image digest for n8nio/n8n:${{ env.N8N_VERSION }} is: $DIGEST"
-          # Pull using the immutable digest to guarantee integrity
+          if [ -z "$DIGEST" ]; then
+            echo "ERROR: Could not resolve digest for n8nio/n8n:${{ env.N8N_VERSION }}. Is the version valid?"
+            exit 1
+          fi
+          echo "Pinned digest: $DIGEST"
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          # Pull by immutable digest — guarantees what we scan is what we promote
           docker pull n8nio/n8n@$DIGEST
-          # Re-tag it with the version tag so subsequent steps can reference it by name
           docker tag n8nio/n8n@$DIGEST n8nio/n8n:${{ env.N8N_VERSION }}
 
-      - name: Identify Vulnerabilities (Non-blocking)
+      - name: Scan for CVEs (non-blocking report)
         run: |
-          trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
-          # Generate a readable text summary
-          echo "### Vulnerability Summary for n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
-          jq -r 'if .Results then .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")" else "No vulnerabilities found." end' trivy-report.json >> trivy-summary.txt
+          trivy image \
+            --format json \
+            --output trivy-report.json \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            n8nio/n8n:${{ env.N8N_VERSION }}
 
-      - name: Upload Vulnerability Report
+          # Human-readable summary
+          echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
+          echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
+          echo "" >> trivy-summary.txt
+          jq -r 'if .Results then
+            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] |
+            "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
+          else "No vulnerabilities found." end' trivy-report.json >> trivy-summary.txt
+
+      - name: Check CISA KEV (Known Exploited Vulnerabilities)
+        run: |
+          # Download CISA KEV JSON catalogue
+          curl -s -o kev.json https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+
+          echo "" >> trivy-summary.txt
+          echo "---" >> trivy-summary.txt
+          echo "### CISA KEV Check — Actively Exploited CVEs" >> trivy-summary.txt
+
+          # Extract CVE IDs from our Trivy report, cross-reference with KEV catalogue
+          VULNS=$(jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | unique | .[]' trivy-report.json 2>/dev/null || echo "")
+          KEV_IDS=$(jq -r '.vulnerabilities[].cveID' kev.json)
+          KEV_HITS=""
+
+          for CVE in $VULNS; do
+            if echo "$KEV_IDS" | grep -q "$CVE"; then
+              ENTRY=$(jq -r ".vulnerabilities[] | select(.cveID==\"$CVE\") | \"- $CVE | \(.vendorProject) \(.product): \(.shortDescription)\"" kev.json)
+              KEV_HITS="$KEV_HITS\n$ENTRY"
+            fi
+          done
+
+          if [ -z "$KEV_HITS" ]; then
+            echo "✅ No CVEs in this image match the CISA KEV catalogue." >> trivy-summary.txt
+          else
+            echo "🚨 The following CVEs are in the CISA KEV catalogue (actively exploited in the wild):" >> trivy-summary.txt
+            echo -e "$KEV_HITS" >> trivy-summary.txt
+          fi
+
+          cat trivy-summary.txt
+
+      - name: Upload Scan Report
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-vulnerability-report-${{ env.N8N_VERSION }}
+          name: scan-report-${{ env.N8N_VERSION }}
           path: |
             trivy-report.json
             trivy-summary.txt
+            kev.json
 
-      - name: Check for vulnerabilities
+      - name: Gate — check for CRITICAL/HIGH CVEs
         id: trivy-scan
         run: |
-          # Run Trivy and capture exit code
           if trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}; then
             echo "is_vulnerable=false" >> $GITHUB_OUTPUT
-            echo "No critical/high vulnerabilities found. Auto-promotion enabled."
           else
             echo "is_vulnerable=true" >> $GITHUB_OUTPUT
-            echo "Critical/High vulnerabilities found. Manual approval required."
           fi
-          exit 0 # Always exit 0 so the workflow continues to the promotion jobs
+          exit 0
 
   promote-images-auto:
     name: Auto Promotion (Clean Image)
@@ -95,32 +139,71 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull and tag clean n8n
+      - name: Pull by digest and push to GHCR
         id: docker_push
         run: |
-          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
-          IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
+          # Pull the exact pinned digest resolved during the scan step
+          DIGEST="${{ needs.scan-images.outputs.image_digest }}"
+          docker pull n8nio/n8n@$DIGEST
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
-          docker tag $IMAGE_NAME $TRUSTED_IMAGE
+          docker tag n8nio/n8n@$DIGEST $TRUSTED_IMAGE
           PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
-          echo "Push output: $PUSH_OUTPUT"
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
-          echo "GHCR digest: $DIGEST"
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          GHCR_DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
+          echo "GHCR digest: $GHCR_DIGEST"
+          echo "digest=$GHCR_DIGEST" >> $GITHUB_OUTPUT
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
-
           push-to-registry: true
 
-      - name: Create or Update GitHub Release
+      - name: Generate SBOM from local image
+        uses: anchore/sbom-action@v0
+        with:
+          image: n8nio/n8n:${{ env.N8N_VERSION }}
+          artifact-name: sbom-${{ env.N8N_VERSION }}.spdx.json
+          output-file: ./sbom.spdx.json
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v1
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
+          subject-digest: ${{ steps.docker_push.outputs.digest }}
+          sbom-path: './sbom.spdx.json'
+          push-to-registry: true
+
+      - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.N8N_VERSION }}
-          name: "n8n Release ${{ env.N8N_VERSION }}"
+          tag_name: n8n-${{ env.N8N_VERSION }}
+          name: "n8n ${{ env.N8N_VERSION }} (Trusted)"
+          body: |
+            ## Trusted n8n Release — ${{ env.N8N_VERSION }}
+
+            ### Image Reference (Digest-Pinned)
+            Pull by **immutable digest** for guaranteed integrity:
+            ```
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted@${{ steps.docker_push.outputs.digest }}
+            ```
+
+            Or by version tag (may update if re-promoted):
+            ```
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}
+            ```
+
+            ### Source
+            - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
+            - Trivy Scan: ✅ No CRITICAL/HIGH CVEs found
+            - KEV Check: see attached `scan-report-${{ env.N8N_VERSION }}` artifact
+
+            ### Rollback
+            To roll back the VM to this exact version, update `N8N_IMAGE_VERSION` in your `.env` file:
+            ```
+            N8N_IMAGE_VERSION=${{ env.N8N_VERSION }}
+            ```
+            Then run `docker compose pull && docker compose up -d`
 
   promote-images-manual:
     name: Manual Approval Promotion (Vulnerable Image)
@@ -141,25 +224,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull, tag and push vulnerable n8n
+      - name: Pull by digest and push to GHCR
         id: docker_push
         run: |
-          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
-          IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
+          DIGEST="${{ needs.scan-images.outputs.image_digest }}"
+          docker pull n8nio/n8n@$DIGEST
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
-          docker tag $IMAGE_NAME $TRUSTED_IMAGE
+          docker tag n8nio/n8n@$DIGEST $TRUSTED_IMAGE
           PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
-          echo "Push output: $PUSH_OUTPUT"
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
-          echo "GHCR digest: $DIGEST"
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          GHCR_DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
+          echo "GHCR digest: $GHCR_DIGEST"
+          echo "digest=$GHCR_DIGEST" >> $GITHUB_OUTPUT
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
-
           push-to-registry: true
 
       - name: Generate SBOM from local image
@@ -177,9 +258,32 @@ jobs:
           sbom-path: './sbom.spdx.json'
           push-to-registry: true
 
-
-      - name: Create or Update GitHub Release
+      - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.N8N_VERSION }}
-          name: "n8n Release ${{ env.N8N_VERSION }}"
+          tag_name: n8n-${{ env.N8N_VERSION }}
+          name: "n8n ${{ env.N8N_VERSION }} (Manually Approved — Vulnerabilities Present)"
+          body: |
+            ## Trusted n8n Release — ${{ env.N8N_VERSION }} ⚠️ Manually Approved
+
+            This version was promoted **with known CRITICAL/HIGH CVEs** after manual review.
+            See the attached `scan-report-${{ env.N8N_VERSION }}` artifact for full details.
+
+            ### Image Reference (Digest-Pinned)
+            ```
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted@${{ steps.docker_push.outputs.digest }}
+            ```
+
+            Or by version tag:
+            ```
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}
+            ```
+
+            ### Source
+            - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
+
+            ### Rollback
+            ```
+            N8N_IMAGE_VERSION=${{ env.N8N_VERSION }}
+            ```
+            Then run `docker compose pull && docker compose up -d`
