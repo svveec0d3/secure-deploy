@@ -1,0 +1,14 @@
+services:
+  n8n:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC}/${REPOSITORY_NAME}/n8n-trusted:latest
+    restart: always
+    environment:
+      - N8N_USER_MANAGEMENT_DISABLED=false
+      - WEBHOOK_URL=http://${HOST_IP}:5678/
+    ports:
+      - 5678:5678
+    volumes:
+      - n8n_storage:/home/node/.n8n
+
+volumes:
+  n8n_storage:
