@@ -138,7 +138,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull and tag vulnerable n8n
+      - name: Pull, tag and push vulnerable n8n
         id: docker_push
         run: |
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
@@ -154,6 +154,21 @@ jobs:
         with:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate SBOM from local image
+        uses: anchore/sbom-action@v0
+        with:
+          image: n8nio/n8n:${{ env.N8N_VERSION }}
+          artifact-name: sbom-${{ env.N8N_VERSION }}.spdx.json
+          output-file: ./sbom.spdx.json
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v1
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
+          subject-digest: ${{ steps.docker_push.outputs.digest }}
+          sbom-path: './sbom.spdx.json'
           push-to-registry: true
 
       - name: Create or Update GitHub Release
