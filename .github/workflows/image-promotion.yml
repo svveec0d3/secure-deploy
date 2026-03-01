@@ -193,12 +193,12 @@ jobs:
           echo "| CVE | Severity | Package | Version | Fixed In | KEV |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :--- | :--- | :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
           
-          jq -r --argfile kev kev.json '
-            def is_kev(id): if ($kev.vulnerabilities | map(.cveID) | contains([id])) then "✅ **Yes**" else "No" end;
+          jq -r --slurpfile kev kev.json '
+            def is_kev(id): if ($kev[0].vulnerabilities | map(.cveID) | contains([id])) then "✅ **Yes**" else "No" end;
             if .Results then
-              [.Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[]] 
+              [.Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[]]
               | sort_by(.Severity) | reverse
-              | .[] | "| [\(.VulnerabilityID)](\(.PrimaryURL)) | \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "None") | \(is_kev(.VulnerabilityID)) |"
+              | .[] | "| [\(.VulnerabilityID)](\(.PrimaryURL)) | \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // \"None\") | \(is_kev(.VulnerabilityID)) |"
             else empty end
           ' trivy-report.json >> $GITHUB_STEP_SUMMARY
 
