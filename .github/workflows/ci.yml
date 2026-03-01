@@ -144,8 +144,9 @@ jobs:
           fi
 
           # CIS 5.4 / 5.31 — No sensitive mounts or docker.sock
+          # Strip comment lines first to avoid matching documentation text in comments
           if grep -q "volumes:" "$COMPOSE"; then
-            SENSITIVE_MOUNTS=$(grep -E "(docker\.sock|/etc:|/proc:|/sys:|/dev:)" "$COMPOSE" || true)
+            SENSITIVE_MOUNTS=$(grep -v '^\s*#' "$COMPOSE" | grep -E "(docker\.sock|/etc:|/proc:|/sys:|/dev:)" || true)
             if [ -z "$SENSITIVE_MOUNTS" ]; then
               add_result "5.4/5.31" "PASS" "No sensitive host paths or docker.sock mounted"
             else
@@ -206,7 +207,8 @@ jobs:
           fi
 
           # CIS 5.21 — Default seccomp not disabled
-          if grep -q "seccomp:unconfined" "$COMPOSE"; then
+          # Strip comment lines to avoid matching documentation text in comments
+          if grep -v '^\s*#' "$COMPOSE" | grep -q "seccomp:unconfined"; then
             add_result "5.21" "FAIL" "seccomp:unconfined is set — default seccomp profile is disabled"
           else
             add_result "5.21" "PASS" "Default seccomp profile is active (not disabled)"

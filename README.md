@@ -28,7 +28,7 @@ A reference implementation of how an enterprise team should securely ingest, ver
 | Mutable tags | **Digest pinning** | Docker Hub SHA256 resolved at ingestion; host deploys `@sha256:…`, never a tag |
 | Unknown provenance | **SLSA Provenance attestation** | `actions/attest-build-provenance` attaches a cryptographically signed provenance record to every promoted image |
 | Unknown provenance | **Upstream cosign check** | Pipeline checks for vendor Sigstore signatures; documents risk gap if absent |
-| Unknown provenance | **Source allowlist** | Only `n8nio/n8n` with strict `x.y.z` semver tags permitted — enforced via `policy/promotion-policy.yml` |
+| Unknown provenance | **Source allowlist** | Only `n8nio/n8n` with strict `x.y.z` semver tags permitted — enforced via `policy/image-ingestion-policy.yml` |
 | No audit trail | **SBOM generation** | Syft generates a full SPDX SBOM for every promoted image, attested to GHCR |
 | No audit trail | **Versioned GitHub Releases** | Every promotion creates an immutable release with digest-pinned pull commands and rollback steps |
 | Known CVEs | **Trivy CVE scan** | All severities (CRITICAL → LOW) scanned at promotion time |
@@ -36,7 +36,7 @@ A reference implementation of how an enterprise team should securely ingest, ver
 | Risk acceptance | **Approval gate** | Blocked images require human review via `trusted-promotion` GitHub Environment before promotion |
 | Delayed CVE exposure | **Weekly re-scan** | Scheduled job re-scans all promoted GHCR images; opens a GitHub Issue if a previously clean image acquires new findings |
 | Host-level integrity | **Host verification** | `install.sh` runs `gh attestation verify` against the exact digest before deploying |
-| Runtime escape | **Container hardening** | `read_only`, `no-new-privileges`, `cap_drop: ALL`, non-root user, tmpfs, resource limits |
+| Runtime escape | **Container hardening** | CIS Docker Benchmark v1.6.0 Section 5 — `read_only`, `no-new-privileges`, `cap_drop: ALL`, AppArmor, non-root user, resource limits, custom network; enforced by CI |
 
 ---
 
@@ -81,15 +81,18 @@ A reference implementation of how an enterprise team should securely ingest, ver
 ```
 .
 ├── policy/
-│   └── promotion-policy.yml      # Policy-as-code: allowlist, block rules, exception handling
+│   ├── image-ingestion-policy.yml     # Allowlist, tag pattern, vendor signature mode
+│   ├── vulnerability-gate-policy.yml  # CVE/KEV block rules, exception process, re-scan policy
+│   ├── runtime-hardening-policy.yml   # CIS Docker Benchmark v1.6.0 compliance table (Section 5)
+│   └── cis-docker-hardening.md        # Human-readable reference for all CIS checks performed
 │
 ├── .github/workflows/
-│   ├── ci.yml                    # Pre-merge: IaC misconfiguration & secret scan on every push/PR
+│   ├── ci.yml                    # Pre-merge: IaC & secret scan + CIS compliance check (blocks on findings)
 │   ├── image-promotion.yml       # Vendor image ingestion, scanning, attestation, and promotion
-│   └── rescan.yml                # Scheduled weekly re-scan of promoted images
+│   └── rescan.yml                # Scheduled weekly re-scan of all promoted images
 │
 └── iac/n8n/
-    ├── docker-compose.yml        # Hardened container stack (read-only FS, no-root, resource limits)
+    ├── docker-compose.yml        # CIS-hardened container stack (read-only FS, no-root, AppArmor, resource limits)
     ├── .env.template             # Environment template — copy to .env and populate
     └── install.sh                # Interactive setup: version selection, digest fetch, provenance verify, deploy
 ```
@@ -116,7 +119,7 @@ When approving a vulnerable image:
 1. Download and retain the `scan-report-<version>` artifact as evidence
 2. Document the accepted risk (CVE IDs, severity, KEV status, business justification) in the GitHub Release notes
 3. Set a **review deadline** — a date by which either a patched version must be deployed or the exception formally renewed
-4. Update `policy/promotion-policy.yml` comments if the exception changes policy intent
+4. Update `policy/vulnerability-gate-policy.yml` comments if the exception changes policy intent
 
 ### 5c. Rollback Procedure
 
@@ -193,4 +196,7 @@ The script will:
 
 - Images **must** originate from `ghcr.io/svveec0d3/secure-deploy/*` — never pulled directly from Docker Hub on production hosts
 - All production images must have a corresponding [GitHub Release](https://github.com/svveec0d3/secure-deploy/releases) with attested SLSA provenance and SBOM
-- Promotion policy is defined in [`policy/promotion-policy.yml`](policy/promotion-policy.yml) — changes require a reviewed PR
+- Image ingestion policy: [`policy/image-ingestion-policy.yml`](policy/image-ingestion-policy.yml) — allowlist and vendor signature rules
+- Vulnerability gate policy: [`policy/vulnerability-gate-policy.yml`](policy/vulnerability-gate-policy.yml) — CVE/KEV block conditions and exception process
+- Runtime hardening policy: [`policy/runtime-hardening-policy.yml`](policy/runtime-hardening-policy.yml) — CIS Docker Benchmark v1.6.0 compliance
+- All policy changes require a reviewed PR
