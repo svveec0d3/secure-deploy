@@ -13,9 +13,12 @@ This repository manages the Infrastructure as Code (IaC) and Secure Supply Chain
 To ensure only trusted and secure images are deployed, we use a **Verification & Promotion** model:
 
 1. **Pull**: The [Image Promotion](.github/workflows/image-promotion.yml) workflow pulls the official n8n image from Docker Hub (`n8nio/n8n`).
+   - **Docker Content Trust**: `DOCKER_CONTENT_TRUST=1` is enabled to enforce image integrity verification directly from Docker Hub via Notary signatures.
 2. **Scan**: [Trivy](https://github.com/aquasecurity/trivy) performs a security scan. 
-   - **Gate**: The workflow fails if any **CRITICAL** or **HIGH** vulnerabilities are found.
-3. **Verify**: Integrity is checked via image digests. (Optional: Cosign provenance verification).
+   - **Gate**: The workflow evaluates vulnerabilities and conditionally pauses if any **CRITICAL** or **HIGH** vulnerabilities are found.
+3. **Verify & Attest**: 
+   - Generates an **SBOM (Software Bill of Materials)** using Syft.
+   - Pushes the image to GHCR and automatically attests both the **SBOM** and **SLSA Build Provenance** dynamically to the image registry using GitHub Actions integrations. This provides cryptographically verifiable proof of compilation and contents.
 
 ### GitHub Actions Setup
 1. Go to your repository **Settings > Environments**.
@@ -48,6 +51,9 @@ Go to **Actions** -> **Image Promotion (Trusted Source)** -> **Run workflow**. T
 
 2. **Run the Interactive Setup Script**:
    We have included an automated script that detects your Host IP, configures your environment, and spins up the container!
+   
+   **Note**: The script requires the [GitHub CLI (`gh`)](https://github.com/cli/cli#installation) to securely authenticate and cryptographically verify the SLSA provenance and SBOM attachments of the image *before* allowing the deployment to proceed.
+   
    ```bash
    chmod +x install.sh
    ./install.sh

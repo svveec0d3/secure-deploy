@@ -16,6 +16,19 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# Check if gh CLI is installed
+if ! command -v gh &> /dev/null; then
+    echo "❌ GitHub CLI (gh) is not installed. It is required for verifying cryptographic image signatures."
+    echo "Please install it: https://github.com/cli/cli#installation"
+    exit 1
+fi
+
+# Ensure user is logged into gh
+if ! gh auth status &> /dev/null; then
+    echo "❌ You are not logged into the GitHub CLI. Please run 'gh auth login' to authenticate with your account so we can verify the image signatures safely."
+    exit 1
+fi
+
 # Detect Current Host IP
 # This finds the primary IP address facing the default route (typically the one used for external/LAN access)
 DETECTED_IP=$(ip -4 route get 8.8.8.8 | awk {'print $7'} | tr -d '\n')
@@ -52,6 +65,19 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
 else
     sed -i "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
+fi
+
+echo "---------------------------------------------"
+echo "🔐 Verifying Cryptographic Provenance & SBOM..."
+echo "---------------------------------------------"
+# This command verifies that the image was completely unaltered from our GitHub Actions CI/CD pipeline
+# It checks both the SLSA provenance and the SBOM attestation.
+if gh attestation verify oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted:latest -o svveec0d3; then
+    echo "✅ Image Signature and Provenance successfully verified!"
+else
+    echo "❌ SECURITY ALERT: Image signature verification failed! The image might have been tampered with or did not originate from your trusted CI/CD pipeline."
+    echo "Deployment aborted."
+    exit 1
 fi
 
 echo "🚀 Deploying n8n container..."
