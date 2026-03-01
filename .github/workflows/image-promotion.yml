@@ -18,6 +18,7 @@ jobs:
     outputs:
       is_vulnerable: ${{ steps.trivy-scan.outputs.is_vulnerable }}
       image_digest: ${{ steps.fetch-digest.outputs.digest }}
+      resolved_version: ${{ steps.fetch-digest.outputs.version }}
     permissions:
       contents: read
     steps:
@@ -258,10 +259,10 @@ jobs:
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: n8n-${{ env.N8N_VERSION }}
-          name: "n8n ${{ env.N8N_VERSION }} (Trusted)"
+          tag_name: n8n-${{ needs.scan-images.outputs.resolved_version }}
+          name: "n8n ${{ needs.scan-images.outputs.resolved_version }} (Trusted)"
           body: |
-            ## Trusted n8n Release — ${{ env.N8N_VERSION }}
+            ## Trusted n8n Release — ${{ needs.scan-images.outputs.resolved_version }}
 
             ### Image Reference (Digest-Pinned)
             Pull by **immutable digest** for guaranteed integrity:
@@ -269,22 +270,23 @@ jobs:
             docker pull ghcr.io/${{ github.repository }}/n8n-trusted@${{ steps.docker_push.outputs.digest }}
             ```
 
-            Or by version tag (may update if re-promoted):
+            Or by version tag:
             ```
-            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ needs.scan-images.outputs.resolved_version }}
             ```
 
             ### Source
             - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
-            - Trivy Scan: ✅ No CRITICAL/HIGH CVEs found
-            - KEV Check: see attached `scan-report-${{ env.N8N_VERSION }}` artifact
+            - GHCR digest: `${{ steps.docker_push.outputs.digest }}`
+            - Trivy Scan: ✅ No CRITICAL/HIGH CVEs found, no CISA KEV matches
+            - Full report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Rollback
-            To roll back the VM to this exact version, update `N8N_IMAGE_VERSION` in your `.env` file:
+            Set these values in your `.env` file and run `docker compose up -d`:
             ```
-            N8N_IMAGE_VERSION=${{ env.N8N_VERSION }}
+            N8N_IMAGE_VERSION=${{ needs.scan-images.outputs.resolved_version }}
+            N8N_IMAGE_DIGEST=${{ steps.docker_push.outputs.digest }}
             ```
-            Then run `docker compose pull && docker compose up -d`
 
   promote-images-manual:
     name: Manual Approval Promotion (Vulnerable Image)
@@ -342,13 +344,13 @@ jobs:
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: n8n-${{ env.N8N_VERSION }}
-          name: "n8n ${{ env.N8N_VERSION }} (Manually Approved — Vulnerabilities Present)"
+          tag_name: n8n-${{ needs.scan-images.outputs.resolved_version }}
+          name: "n8n ${{ needs.scan-images.outputs.resolved_version }} (Manually Approved — Vulnerabilities Present)"
           body: |
-            ## Trusted n8n Release — ${{ env.N8N_VERSION }} ⚠️ Manually Approved
+            ## ⚠️ n8n ${{ needs.scan-images.outputs.resolved_version }} — Manually Approved
 
-            This version was promoted **with known CRITICAL/HIGH CVEs** after manual review.
-            See the attached `scan-report-${{ env.N8N_VERSION }}` artifact for full details.
+            This version was promoted **with known CRITICAL/HIGH CVEs or CISA KEV matches** after manual review.
+            Full scan report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Image Reference (Digest-Pinned)
             ```
@@ -357,14 +359,16 @@ jobs:
 
             Or by version tag:
             ```
-            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}
+            docker pull ghcr.io/${{ github.repository }}/n8n-trusted:${{ needs.scan-images.outputs.resolved_version }}
             ```
 
             ### Source
             - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
+            - GHCR digest: `${{ steps.docker_push.outputs.digest }}`
 
             ### Rollback
+            Set these values in your `.env` file and run `docker compose up -d`:
             ```
-            N8N_IMAGE_VERSION=${{ env.N8N_VERSION }}
+            N8N_IMAGE_VERSION=${{ needs.scan-images.outputs.resolved_version }}
+            N8N_IMAGE_DIGEST=${{ steps.docker_push.outputs.digest }}
             ```
-            Then run `docker compose pull && docker compose up -d`
