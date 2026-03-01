@@ -35,6 +35,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
+      - name: Enforce Docker Content Trust & Pull Image
+        run: |
+          export DOCKER_CONTENT_TRUST=1
+          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
+
       - name: Identify Vulnerabilities (Non-blocking)
         run: |
           trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
@@ -69,8 +74,10 @@ jobs:
     if: needs.scan-images.outputs.is_vulnerable == 'false'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -80,12 +87,28 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull and tag clean n8n
+        id: docker_push
         run: |
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
           IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
           docker push $TRUSTED_IMAGE
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $TRUSTED_IMAGE | awk -F@ '{print $2}')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
+          subject-digest: ${{ steps.docker_push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.N8N_VERSION }}
+          name: "n8n Release ${{ env.N8N_VERSION }}"
 
   promote-images-manual:
     name: Manual Approval Promotion (Vulnerable Image)
@@ -94,8 +117,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: trusted-promotion
     permissions:
-      contents: read
+      contents: write
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -105,9 +130,25 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull and tag vulnerable n8n
+        id: docker_push
         run: |
           docker pull n8nio/n8n:${{ env.N8N_VERSION }}
           IMAGE_NAME="n8nio/n8n:${{ env.N8N_VERSION }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
           docker push $TRUSTED_IMAGE
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $TRUSTED_IMAGE | awk -F@ '{print $2}')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
+          subject-digest: ${{ steps.docker_push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.N8N_VERSION }}
+          name: "n8n Release ${{ env.N8N_VERSION }}"

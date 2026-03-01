@@ -1,4 +1,6 @@
 # Secure n8n Container Host Deployment
+![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)
+![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)
 
 This repository manages the Infrastructure as Code (IaC) and Secure Supply Chain for deploying n8n on a container host.
 
@@ -33,12 +35,15 @@ To ensure only trusted and secure images are deployed, we use a **Verification &
 ### 1. Populate Trusted Source
 Go to **Actions** -> **Image Promotion (Trusted Source)** -> **Run workflow**. This ensures the images exist in your GHCR.
 
-### How to Get Started
+3. **Log In**:
+   Follow the URL outputted by the script (e.g., `http://<YOUR_IP>:5678`) to begin building n8n workflows!
+
+## How to Get Started
 
 1. **Clone the repo** on your container host:
    ```bash
-   git clone https://github.com/svveec0d3/container-host.git
-   cd container-host/iac/n8n
+   git clone https://github.com/svveec0d3/secure-deploy.git
+   cd secure-deploy/iac/n8n
    ```
 
 2. **Run the Interactive Setup Script**:
@@ -48,9 +53,8 @@ Go to **Actions** -> **Image Promotion (Trusted Source)** -> **Run workflow**. T
    ./install.sh
    ```
 
-3. **Log In**:
    Follow the URL outputted by the script (e.g., `http://<YOUR_IP>:5678`) to begin building n8n workflows!
 
 ## Security Policy
-- All images **MUST** be pulled from `ghcr.io/swee/container-host/*`.
+- All images **MUST** be pulled from `ghcr.io/svveec0d3/secure-deploy/*`.
 - Direct pulls from Docker Hub on the host are discouraged to maintain provenance and security control.

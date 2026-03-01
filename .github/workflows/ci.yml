@@ -1,0 +1,26 @@
+name: CI Scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  config-scan:
+    name: Config Scan & Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner on repo
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          ignore-unfixed: true
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
