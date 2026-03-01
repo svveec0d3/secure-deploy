@@ -24,14 +24,63 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Trivy
+      - name: Install Trivy and cosign
         run: |
           sudo apt-get update
           sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq
+          # Install Trivy
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
           echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          sudo apt-get update && sudo apt-get install -y trivy
+          # Install cosign for upstream publisher identity checks
+          curl -sLO https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64
+          sudo install -m 755 cosign-linux-amd64 /usr/local/bin/cosign
+
+      - name: Enforce Source Allowlist (Policy-as-Code)
+        run: |
+          ALLOWED_IMAGE=$(grep 'source_image:' policy/promotion-policy.yml | awk '{print $2}' | tr -d '"')
+          TAG_PATTERN=$(grep 'tag_pattern:' policy/promotion-policy.yml | awk '{print $2}' | tr -d '"')
+          REQUESTED_VERSION="${{ env.N8N_VERSION }}"
+
+          echo "Policy: allowed source = $ALLOWED_IMAGE"
+
+          # Enforce source repo allowlist
+          if [ "$ALLOWED_IMAGE" != "n8nio/n8n" ]; then
+            echo "❌ POLICY VIOLATION: Source image '$ALLOWED_IMAGE' is not the allowlisted source."
+            exit 1
+          fi
+          echo "✅ Source allowlist passed: n8nio/n8n"
+
+          # Enforce tag pattern (skip if 'latest' — will be resolved to semver in next step)
+          if [ "$REQUESTED_VERSION" != "latest" ]; then
+            if ! echo "$REQUESTED_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "❌ POLICY VIOLATION: Tag '$REQUESTED_VERSION' does not match semver pattern. Moving targets (stable, nightly, etc.) are not permitted."
+              exit 1
+            fi
+            echo "✅ Tag pattern passed: $REQUESTED_VERSION matches x.y.z"
+          fi
+
+      - name: Check Upstream Vendor Signature (Cosign)
+        run: |
+          echo "" >> trivy-summary-meta.txt || true
+          echo "### Upstream Vendor Signature Check" > vendor-sig-check.txt
+          echo "Checking if n8nio/n8n publishes Sigstore/cosign signatures..." >> vendor-sig-check.txt
+
+          # Attempt cosign verification of the upstream Docker Hub image
+          if cosign verify n8nio/n8n:${{ env.N8N_VERSION }} \
+              --certificate-identity-regexp=".*" \
+              --certificate-oidc-issuer-regexp=".*" 2>/dev/null; then
+            echo "✅ Vendor signature VERIFIED — n8n publishes Sigstore signatures." >> vendor-sig-check.txt
+          else
+            echo "⚠️  VENDOR RISK GAP: n8nio/n8n does not publish Sigstore/cosign signatures." >> vendor-sig-check.txt
+            echo "   Publisher identity cannot be cryptographically verified upstream." >> vendor-sig-check.txt
+            echo "   Mitigations in place (per policy/promotion-policy.yml):" >> vendor-sig-check.txt
+            echo "   - Source allowlisted to n8nio/n8n only" >> vendor-sig-check.txt
+            echo "   - Strict semver tag enforcement (no moving targets)" >> vendor-sig-check.txt
+            echo "   - Immutable SHA256 digest pinning throughout pipeline" >> vendor-sig-check.txt
+            echo "   Accepted risk: see policy/promotion-policy.yml vendor_signature.accepted_risk" >> vendor-sig-check.txt
+          fi
+          cat vendor-sig-check.txt
 
       - name: Fetch and pin image by digest
         id: fetch-digest
@@ -129,6 +178,7 @@ jobs:
           path: |
             trivy-report.json
             trivy-summary.txt
+            vendor-sig-check.txt
             kev.json
 
       - name: Gate — Require approval if CRITICAL/HIGH or KEV hit

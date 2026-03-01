@@ -3,111 +3,173 @@
 # Exit on error
 set -e
 
+# ─── FLAGS ──────────────────────────────────────────────────────────────────
+# Pass --skip-verify to bypass provenance verification (for automation)
+SKIP_ATTESTATION=false
+for arg in "$@"; do
+  case $arg in
+    --skip-verify) SKIP_ATTESTATION=true ;;
+  esac
+done
+
 echo "============================================="
 echo "        n8n Secure Deployment Setup         "
 echo "============================================="
-echo "This script will help you configure and deploy"
-echo "your n8n container stack automatically."
 echo ""
 
-# Check if docker is installed
+# ─── PREFLIGHT CHECKS ───────────────────────────────────────────────────────
 if ! command -v docker &> /dev/null; then
     echo "❌ Docker is not installed. Please install Docker and Docker Compose first."
     exit 1
 fi
 
-# Check if provenance verification is possible
-VERIFY_PROVENANCE=false
+# ─── DETECT HOST IP ─────────────────────────────────────────────────────────
+DETECTED_IP=$(ip -4 route get 8.8.8.8 2>/dev/null | awk '{print $7}' | tr -d '\n')
+[ -z "$DETECTED_IP" ] && DETECTED_IP="127.0.0.1"
+
+echo "The HOST_IP is required for n8n Webhook integrations."
+echo "Detected your Host IP as: $DETECTED_IP"
+echo ""
+read -p "Enter your Host IP address (or press Enter to use $DETECTED_IP): " USER_IP
+FINAL_IP=${USER_IP:-$DETECTED_IP}
+echo ""
+echo "✅ Using HOST_IP: $FINAL_IP"
+
+# ─── CHOOSE VERSION ─────────────────────────────────────────────────────────
+echo ""
+echo "Available releases: https://github.com/svveec0d3/secure-deploy/releases"
+read -p "Enter the n8n version to deploy (e.g. 1.55.3, or press Enter for latest): " USER_VERSION
+
+if [ -z "$USER_VERSION" ] || [ "$USER_VERSION" = "latest" ]; then
+    # Auto-resolve latest from GitHub Releases
+    if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
+        USER_VERSION=$(gh release list --repo svveec0d3/secure-deploy --limit 20 --json tagName \
+            | jq -r '.[].tagName' | grep -E '^n8n-[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^n8n-//' | sort -V | tail -1)
+        echo "Resolved latest release: $USER_VERSION"
+    else
+        echo "⚠️  Cannot auto-resolve latest without GitHub CLI. Please enter an explicit version."
+        exit 1
+    fi
+fi
+N8N_VERSION="$USER_VERSION"
+RELEASE_TAG="n8n-${N8N_VERSION}"
+
+# ─── FETCH DIGEST FROM GITHUB RELEASE ───────────────────────────────────────
+echo ""
+echo "---------------------------------------------"
+echo "🔍 Fetching digest for n8n-trusted:${N8N_VERSION} from GitHub Release..."
+echo "---------------------------------------------"
+
+GHCR_DIGEST=""
 if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
-    VERIFY_PROVENANCE=true
+    RELEASE_BODY=$(gh release view "$RELEASE_TAG" --repo svveec0d3/secure-deploy --json body -q '.body' 2>/dev/null || echo "")
+    # Extract the sha256 digest from the release body (line: docker pull ...@sha256:...)
+    GHCR_DIGEST=$(echo "$RELEASE_BODY" | grep -oP 'sha256:[a-f0-9]{64}' | head -1)
+fi
+
+if [ -z "$GHCR_DIGEST" ]; then
+    echo "⚠️  Could not fetch digest from GitHub Release."
+    read -p "   Enter the GHCR digest manually (sha256:...), or press Enter to use version tag: " MANUAL_DIGEST
+    if [ -n "$MANUAL_DIGEST" ]; then
+        GHCR_DIGEST="$MANUAL_DIGEST"
+    else
+        echo "   ⚠️  Falling back to version tag (less secure — digest not pinned)."
+    fi
 else
+    echo "✅ GHCR digest: $GHCR_DIGEST"
+fi
+
+# ─── PROVENANCE VERIFICATION ────────────────────────────────────────────────
+echo ""
+echo "---------------------------------------------"
+echo "🔐 Verifying Cryptographic Provenance..."
+echo "---------------------------------------------"
+
+if [ "$SKIP_ATTESTATION" = true ]; then
+    echo "   ⚠️  --skip-verify flag set. Skipping attestation verification."
+elif ! command -v gh &> /dev/null || ! gh auth status &> /dev/null 2>&1; then
     echo ""
-    echo "⚠️  Optional: Cryptographic provenance verification requires the GitHub CLI (gh) and login."
-    echo "   Install it at: https://github.com/cli/cli#installation"
-    read -p "   Skip provenance verification and continue anyway? (Y/n): " SKIP_VERIFY
-    SKIP_VERIFY=${SKIP_VERIFY:-Y}
-    if [[ "$SKIP_VERIFY" =~ ^[Nn]$ ]]; then
+    echo "⚠️  Provenance verification requires the GitHub CLI (gh) and authentication."
+    echo "   Install: https://github.com/cli/cli#installation"
+    read -p "   Skip verification and continue anyway? (Y/n): " SKIP_CONFIRM
+    SKIP_CONFIRM=${SKIP_CONFIRM:-Y}
+    if [[ "$SKIP_CONFIRM" =~ ^[Nn]$ ]]; then
         echo "Aborted. Please install and authenticate the GitHub CLI first."
         exit 1
     fi
     echo "   ⚠️  Skipping provenance verification."
-fi
-
-# Detect Current Host IP
-# This finds the primary IP address facing the default route (typically the one used for external/LAN access)
-DETECTED_IP=$(ip -4 route get 8.8.8.8 | awk {'print $7'} | tr -d '\n')
-
-if [ -z "$DETECTED_IP" ]; then
-    DETECTED_IP="127.0.0.1"
-fi
-
-echo "The HOST_IP is required for n8n Webhook integrations."
-echo "I have automatically detected your current Host IP as: $DETECTED_IP"
-echo ""
-read -p "Enter your Host IP address (or press Enter to use $DETECTED_IP): " USER_IP
-
-if [ -z "$USER_IP" ]; then
-    FINAL_IP=$DETECTED_IP
 else
-    FINAL_IP=$USER_IP
+    # Verify against EXACT digest (cryptographically bound to the artifact being run)
+    if [ -n "$GHCR_DIGEST" ]; then
+        VERIFY_SUBJECT="oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted@${GHCR_DIGEST}"
+        echo "Verifying: $VERIFY_SUBJECT"
+    else
+        VERIFY_SUBJECT="oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted:${N8N_VERSION}"
+        echo "⚠️  No digest available — verifying by tag (weaker guarantee)"
+    fi
+
+    if gh attestation verify "$VERIFY_SUBJECT" -o svveec0d3; then
+        echo "✅ Provenance verified — image cryptographically bound to this pipeline."
+    else
+        echo ""
+        echo "❌ SECURITY ALERT: Provenance verification FAILED."
+        echo "   The image may have been tampered with or did not originate from the trusted pipeline."
+        echo "   Deployment aborted."
+        exit 1
+    fi
 fi
 
-echo ""
-echo "✅ Using HOST_IP: $FINAL_IP"
-
-# Create .env from template if it doesn't exist
+# ─── WRITE .ENV ─────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
+    echo ""
     echo "📝 Creating .env file from template..."
     cp .env.template .env
 else
+    echo ""
     echo "📝 Updating existing .env file..."
 fi
 
-# Update the HOST_IP in the .env file
-# Works for both macOS (sed -i '') and Linux (sed -i)
+# Update HOST_IP
 if [[ "$OSTYPE" == "darwin"* ]]; then
     sed -i '' "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
+    sed -i '' "s/^N8N_IMAGE_VERSION=.*/N8N_IMAGE_VERSION=$N8N_VERSION/" .env
 else
     sed -i "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
+    sed -i "s/^N8N_IMAGE_VERSION=.*/N8N_IMAGE_VERSION=$N8N_VERSION/" .env
 fi
 
-echo "---------------------------------------------"
-echo "🔐 Verifying Cryptographic Provenance & SBOM..."
-echo "---------------------------------------------"
-# This command verifies that the image was completely unaltered from our GitHub Actions CI/CD pipeline
-# It checks both the SLSA provenance and the SBOM attestation.
-if [ "$VERIFY_PROVENANCE" = true ]; then
-    if gh attestation verify oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted:latest -o svveec0d3; then
-        echo "✅ Image Signature and Provenance successfully verified!"
+# Write the immutable digest (the runtime uses this — not the tag)
+if [ -n "$GHCR_DIGEST" ]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
     else
-        echo "❌ SECURITY ALERT: Image signature verification failed! The image might have been tampered with or did not originate from your trusted CI/CD pipeline."
-        echo "Deployment aborted."
-        exit 1
+        sed -i "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
     fi
-else
-    echo "   ⚠️  Provenance check skipped."
+    echo "✅ Digest written to .env — Docker will run the exact attested image."
 fi
 
-echo "🚀 Deploying n8n container..."
+# ─── DEPLOY ─────────────────────────────────────────────────────────────────
+echo ""
+echo "🚀 Deploying n8n ${N8N_VERSION}..."
 echo "---------------------------------------------"
 
-# Start the docker containers
 docker compose up -d
 
 echo "---------------------------------------------"
 echo "⏳ Waiting for n8n to start..."
 sleep 5
 
-# Check if container is running
 if docker ps | grep -q "n8n-trusted"; then
     echo ""
-    echo "🎉 SUCCESS! n8n has been successfully deployed."
+    echo "🎉 SUCCESS! n8n ${N8N_VERSION} deployed from digest ${GHCR_DIGEST:-<tag>}."
     echo "============================================="
-    echo "🔗 Get started by opening your browser to:"
+    echo "🔗 Access your n8n instance at:"
     echo "http://$FINAL_IP:5678"
     echo "============================================="
-    echo "To view logs, run: docker compose logs -f"
+    echo "To view logs: docker compose logs -f"
+    echo "To rollback:  edit N8N_IMAGE_DIGEST in .env and run: docker compose up -d"
 else
-    echo "⚠️ The container might not have started correctly."
-    echo "Run 'docker compose logs' to diagnose any issues."
+    echo "⚠️  The container may not have started correctly."
+    echo "Run 'docker compose logs' to diagnose."
 fi

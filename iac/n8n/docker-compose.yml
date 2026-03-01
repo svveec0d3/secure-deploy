@@ -1,6 +1,9 @@
 services:
   n8n:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC}/${REPOSITORY_NAME}/n8n-trusted:${N8N_IMAGE_VERSION:-latest}
+    # Runtime always uses the immutable digest — never a mutable tag.
+    # N8N_IMAGE_DIGEST is auto-populated by install.sh from the GitHub Release.
+    # To rollback: set N8N_IMAGE_DIGEST in .env to the digest of a previous release.
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC}/${REPOSITORY_NAME}/n8n-trusted@${N8N_IMAGE_DIGEST}
     restart: always
     environment:
       - N8N_USER_MANAGEMENT_DISABLED=false

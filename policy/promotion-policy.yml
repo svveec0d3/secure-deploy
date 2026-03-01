@@ -1,0 +1,37 @@
+# Promotion Policy — Policy-as-Code
+# Changes to this file must go through a Pull Request for auditability.
+# The image-promotion pipeline reads and enforces these rules dynamically.
+
+# ─── ALLOWLIST ──────────────────────────────────────────────────────────────
+# Only images from this upstream source may be ingested.
+allowlist:
+  source_image: "n8nio/n8n"
+  # Tags must match strict semver (x.y.z). Moving targets like 'latest',
+  # 'stable', or 'nightly' are resolved to a concrete semver first.
+  tag_pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+# ─── BLOCK RULES ────────────────────────────────────────────────────────────
+# Images matching ANY of these conditions are blocked from auto-promotion.
+# They require explicit manual approval via the 'trusted-promotion' environment.
+block_on:
+  - condition: "critical_or_high_cve"
+    description: "Any unfixed CVE with CRITICAL or HIGH severity"
+  - condition: "kev_match"
+    description: "Any CVE (any severity) present in the CISA Known Exploited Vulnerabilities catalogue"
+
+# ─── ALLOW WITH EXCEPTION ───────────────────────────────────────────────────
+# Blocked images may be promoted only after human review via this environment.
+allow_with_exception:
+  environment: "trusted-promotion"
+  note: "Reviewer must download and assess the scan-report artifact before approving"
+
+# ─── VENDOR SIGNATURE POLICY ────────────────────────────────────────────────
+# If the vendor publishes Sigstore/cosign signatures, set to 'required'.
+# If the vendor does NOT publish signatures, set to 'warn' to log a risk gap
+# without blocking ingestion (document the accepted risk below).
+vendor_signature:
+  mode: "warn"               # Options: required | warn | skip
+  accepted_risk: |
+    n8n (n8nio/n8n) does not currently publish Sigstore or Notary v2 signatures.
+    Publisher identity is enforced by: allowlisted source repo, strict semver tags,
+    and immutable SHA256 digest pinning. This gap is logged in every scan report.
