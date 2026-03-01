@@ -1,9 +1,5 @@
 # CIS Docker Benchmark v1.6.0 — Automated Compliance Checks
 
-[🏠 Main README](../README.md) | [🛡️ CIS Hardening Guide](cis-docker-hardening.md)
-
----
-
 **Benchmark**: CIS Docker Benchmark **v1.6.0** (2023-09-29)
 **Source**: https://www.cisecurity.org/benchmark/docker
 **Scope**: Section 5 — Container Runtime Configuration
