@@ -20,10 +20,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.49.1
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -31,17 +27,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull, Scan and Promote n8n
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.18.0
+        with:
+          image-ref: 'docker.io/n8nio/n8n:${{ github.event.inputs.n8n_version }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Promote n8n to Trusted Source
         run: |
           IMAGE_NAME="n8nio/n8n:${{ github.event.inputs.n8n_version }}"
           TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ github.event.inputs.n8n_version }}"
           
-          echo "Pulling $IMAGE_NAME..."
+          echo "Pulling $IMAGE_NAME to tag..."
           docker pull $IMAGE_NAME
-          
-          echo "Running Trivy security scan..."
-          /usr/local/bin/trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed $IMAGE_NAME
-          
-          echo "Promoting to trusted source..."
           docker tag $IMAGE_NAME $TRUSTED_IMAGE
           docker push $TRUSTED_IMAGE
