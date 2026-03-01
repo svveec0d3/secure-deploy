@@ -39,9 +39,7 @@ jobs:
 
       - name: Run Trivy vulnerability scanner
         run: |
-          mkdir -p ./bin
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b ./bin v0.49.1
-          ./bin/trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy:latest image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}
 
       - name: Promote n8n to Trusted Source
         run: |
