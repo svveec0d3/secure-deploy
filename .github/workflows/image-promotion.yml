@@ -56,10 +56,11 @@ jobs:
 
       - name: Scan for CVEs (non-blocking report)
         run: |
+          # Scan ALL severities so KEV can cross-reference Medium/Low CVEs too
           trivy image \
             --format json \
             --output trivy-report.json \
-            --severity CRITICAL,HIGH \
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
             --ignore-unfixed \
             n8nio/n8n:${{ env.N8N_VERSION }}
 
@@ -67,39 +68,46 @@ jobs:
           echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
           echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
           echo "" >> trivy-summary.txt
+          echo "#### CRITICAL & HIGH CVEs" >> trivy-summary.txt
           jq -r 'if .Results then
-            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] |
+            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity=="CRITICAL" or .Severity=="HIGH") |
             "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
-          else "No vulnerabilities found." end' trivy-report.json >> trivy-summary.txt
+          else "None." end' trivy-report.json >> trivy-summary.txt
+          echo "" >> trivy-summary.txt
+          echo "#### MEDIUM & LOW CVEs" >> trivy-summary.txt
+          jq -r 'if .Results then
+            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity=="MEDIUM" or .Severity=="LOW") |
+            "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
+          else "None." end' trivy-report.json >> trivy-summary.txt
 
       - name: Check CISA KEV (Known Exploited Vulnerabilities)
+        id: kev-check
         run: |
-          # Download CISA KEV JSON catalogue
           curl -s -o kev.json https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
 
           echo "" >> trivy-summary.txt
           echo "---" >> trivy-summary.txt
           echo "### CISA KEV Check — Actively Exploited CVEs" >> trivy-summary.txt
 
-          # Extract CVE IDs from our Trivy report, cross-reference with KEV catalogue
+          # Cross-reference ALL CVE IDs (any severity) against KEV
           VULNS=$(jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | unique | .[]' trivy-report.json 2>/dev/null || echo "")
           KEV_IDS=$(jq -r '.vulnerabilities[].cveID' kev.json)
-          KEV_HITS=""
+          KEV_HIT=false
 
           for CVE in $VULNS; do
             if echo "$KEV_IDS" | grep -q "$CVE"; then
-              ENTRY=$(jq -r ".vulnerabilities[] | select(.cveID==\"$CVE\") | \"- $CVE | \(.vendorProject) \(.product): \(.shortDescription)\"" kev.json)
-              KEV_HITS="$KEV_HITS\n$ENTRY"
+              SEVERITY=$(jq -r ".Results[]?.Vulnerabilities[]? | select(.VulnerabilityID==\"$CVE\") | .Severity" trivy-report.json | head -1)
+              ENTRY=$(jq -r ".vulnerabilities[] | select(.cveID==\"$CVE\") | \"- $CVE ($SEVERITY — KEV) | \(.vendorProject) \(.product): \(.shortDescription)\"" kev.json)
+              echo "$ENTRY" >> trivy-summary.txt
+              KEV_HIT=true
             fi
           done
 
-          if [ -z "$KEV_HITS" ]; then
-            echo "✅ No CVEs in this image match the CISA KEV catalogue." >> trivy-summary.txt
-          else
-            echo "🚨 The following CVEs are in the CISA KEV catalogue (actively exploited in the wild):" >> trivy-summary.txt
-            echo -e "$KEV_HITS" >> trivy-summary.txt
+          if [ "$KEV_HIT" = false ]; then
+            echo "✅ No CVEs match the CISA KEV catalogue." >> trivy-summary.txt
           fi
 
+          echo "kev_hit=$KEV_HIT" >> $GITHUB_OUTPUT
           cat trivy-summary.txt
 
       - name: Upload Scan Report
@@ -111,13 +119,24 @@ jobs:
             trivy-summary.txt
             kev.json
 
-      - name: Gate — check for CRITICAL/HIGH CVEs
+      - name: Gate — Require approval if CRITICAL/HIGH or KEV hit
         id: trivy-scan
         run: |
-          if trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}; then
-            echo "is_vulnerable=false" >> $GITHUB_OUTPUT
-          else
+          # Check 1: any CRITICAL or HIGH CVEs?
+          HAS_CRIT_HIGH=false
+          if ! trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}; then
+            HAS_CRIT_HIGH=true
+          fi
+
+          # Check 2: any CVE (any severity) matched the KEV catalogue?
+          KEV_HIT="${{ steps.kev-check.outputs.kev_hit }}"
+
+          if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
+            echo "⚠️ Approval required: HAS_CRIT_HIGH=$HAS_CRIT_HIGH  KEV_HIT=$KEV_HIT"
             echo "is_vulnerable=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Clean: no CRITICAL/HIGH CVEs and no KEV matches. Auto-promotion enabled."
+            echo "is_vulnerable=false" >> $GITHUB_OUTPUT
           fi
           exit 0
 
