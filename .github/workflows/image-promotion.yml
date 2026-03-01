@@ -112,6 +112,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
 
+          push-to-registry: true
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -155,6 +156,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
 
+          push-to-registry: true
 
       - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
@@ -169,6 +171,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           sbom-path: './sbom.spdx.json'
+          push-to-registry: true
 
 
       - name: Create or Update GitHub Release
