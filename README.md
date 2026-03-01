@@ -1,5 +1,9 @@
 # 🔐 Secure Deploy — Enterprise Vendor Image Ingestion Pipeline
 
+[🏠 Main README](README.md) | [🛡️ CIS Hardening Guide](policy/cis-docker-hardening.md)
+
+---
+
 [![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 
