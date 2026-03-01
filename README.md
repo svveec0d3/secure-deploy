@@ -33,15 +33,23 @@ To ensure only trusted and secure images are deployed, we use a **Verification &
 ### 1. Populate Trusted Source
 Go to **Actions** -> **Image Promotion (Trusted Source)** -> **Run workflow**. This ensures the images exist in your GHCR.
 
-### 2. Deploy to Container Host
-On your host:
-```bash
-git clone <this-repo-url>
-cd iac/n8n
-cp .env.template .env
-# Update .env with your secure passwords and host configuration (HOST_IP)
-docker compose up -d
-```
+### How to Get Started
+
+1. **Clone the repo** on your container host:
+   ```bash
+   git clone https://github.com/svveec0d3/container-host.git
+   cd container-host/iac/n8n
+   ```
+
+2. **Run the Interactive Setup Script**:
+   We have included an automated script that detects your Host IP, configures your environment, and spins up the container!
+   ```bash
+   chmod +x install.sh
+   ./install.sh
+   ```
+
+3. **Log In**:
+   Follow the URL outputted by the script (e.g., `http://<YOUR_IP>:5678`) to begin building n8n workflows!
 
 ## Security Policy
 - All images **MUST** be pulled from `ghcr.io/swee/container-host/*`.
