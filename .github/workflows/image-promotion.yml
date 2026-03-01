@@ -172,6 +172,44 @@ jobs:
           echo "kev_hit=$KEV_HIT" >> $GITHUB_OUTPUT
           cat trivy-summary.txt
 
+      - name: Generate Enhanced Job Summary
+        if: always()
+        run: |
+          echo "## 🛡️ Security Scan Summary: n8nio/n8n:${{ env.N8N_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Vulnerability Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ ! -f trivy-report.json ]; then
+            echo "❌ No scan report found." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # Generate the Markdown table using jq
+          # Logic: 
+          # 1. Load KEV IDs into a lookup object for O(1) matching in jq if possible, 
+          #    but for simplicity in shell/jq, we can use --argfile or similar.
+          
+          echo "| CVE | Severity | Package | Version | Fixed In | KEV |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- | :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+          
+          jq -r --argfile kev kev.json '
+            def is_kev(id): if ($kev.vulnerabilities | map(.cveID) | contains([id])) then "✅ **Yes**" else "No" end;
+            if .Results then
+              [.Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[]] 
+              | sort_by(.Severity) | reverse
+              | .[] | "| [\(.VulnerabilityID)](\(.PrimaryURL)) | \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "None") | \(is_kev(.VulnerabilityID)) |"
+            else empty end
+          ' trivy-report.json >> $GITHUB_STEP_SUMMARY
+
+          if [ $(jq '.Results[].Vulnerabilities | length' trivy-report.json | awk '{s+=$1} END {print s}') -eq 0 ]; then
+            echo "✅ No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          cat vendor-sig-check.txt >> $GITHUB_STEP_SUMMARY
+
       - name: Upload Scan Report
         uses: actions/upload-artifact@v4
         with:
