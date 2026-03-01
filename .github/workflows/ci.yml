@@ -8,7 +8,7 @@ on:
 
 jobs:
   config-scan:
-    name: Config Scan & Lint
+    name: IaC Misconfiguration & Secret Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
