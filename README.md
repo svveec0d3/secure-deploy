@@ -37,6 +37,8 @@ A reference implementation that shows **how to securely ingest, verify and deplo
 | Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans all promoted images; opens issue on new findings. | Continuous compliance monitoring. | **Level 2** |
 | Operational gaps | **Host verification script** | `install.sh` runs `gh attestation verify` against exact digest before deployment. | Guarantees host runs the exact promoted image. | **Level 3** |
 
+**SLSA Maturity**: This repository demonstrates **SLSA Level 3**. By generating signed provenance attestations for every promoted image, pinning digests, and publishing reproducible SBOMs, it meets the requirements for automated provenance verification and reproducible builds, which are the hallmarks of Level 3.
+
 ---
 
 ## 3️⃣ Pipeline Architecture
