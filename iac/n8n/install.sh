@@ -32,7 +32,6 @@ echo "Detected your Host IP as: $DETECTED_IP"
 echo ""
 read -p "Enter your Host IP address (or press Enter to use $DETECTED_IP): " USER_IP
 FINAL_IP=${USER_IP:-$DETECTED_IP}
-echo ""
 echo "✅ Using HOST_IP: $FINAL_IP"
 
 # ─── CHOOSE VERSION ─────────────────────────────────────────────────────────
@@ -41,7 +40,6 @@ echo "Available releases: https://github.com/svveec0d3/secure-deploy/releases"
 read -p "Enter the n8n version to deploy (e.g. 1.55.3, or press Enter for latest): " USER_VERSION
 
 if [ -z "$USER_VERSION" ] || [ "$USER_VERSION" = "latest" ]; then
-    # Auto-resolve latest from GitHub Releases
     if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
         USER_VERSION=$(gh release list --repo svveec0d3/secure-deploy --limit 20 --json tagName \
             | jq -r '.[].tagName' | grep -E '^n8n-[0-9]+\.[0-9]+\.[0-9]+$' \
@@ -55,6 +53,27 @@ fi
 N8N_VERSION="$USER_VERSION"
 RELEASE_TAG="n8n-${N8N_VERSION}"
 
+# ─── RESOURCE LIMITS ────────────────────────────────────────────────────────
+echo ""
+echo "============================================="
+echo "   Container Resource Limits (Hardening)     "
+echo "============================================="
+echo "These limits cap the blast radius if the container is compromised."
+echo "Press Enter to accept the defaults."
+echo ""
+
+read -p "Memory limit (e.g. 512m, 1g, 2g) [default: 1g]: " INPUT_MEM
+MEM_LIMIT=${INPUT_MEM:-1g}
+
+read -p "CPU limit (e.g. 0.5, 1.0, 2.0) [default: 1.0]: " INPUT_CPU
+CPU_LIMIT=${INPUT_CPU:-1.0}
+
+read -p "Max processes (pids_limit) [default: 200]: " INPUT_PIDS
+PIDS_LIMIT=${INPUT_PIDS:-200}
+
+echo ""
+echo "✅ Resource limits: memory=${MEM_LIMIT}, cpus=${CPU_LIMIT}, pids=${PIDS_LIMIT}"
+
 # ─── FETCH DIGEST FROM GITHUB RELEASE ───────────────────────────────────────
 echo ""
 echo "---------------------------------------------"
@@ -64,7 +83,6 @@ echo "---------------------------------------------"
 GHCR_DIGEST=""
 if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
     RELEASE_BODY=$(gh release view "$RELEASE_TAG" --repo svveec0d3/secure-deploy --json body -q '.body' 2>/dev/null || echo "")
-    # Extract the sha256 digest from the release body (line: docker pull ...@sha256:...)
     GHCR_DIGEST=$(echo "$RELEASE_BODY" | grep -oP 'sha256:[a-f0-9]{64}' | head -1)
 fi
 
@@ -100,7 +118,6 @@ elif ! command -v gh &> /dev/null || ! gh auth status &> /dev/null 2>&1; then
     fi
     echo "   ⚠️  Skipping provenance verification."
 else
-    # Verify against EXACT digest (cryptographically bound to the artifact being run)
     if [ -n "$GHCR_DIGEST" ]; then
         VERIFY_SUBJECT="oci://ghcr.io/svveec0d3/secure-deploy/n8n-trusted@${GHCR_DIGEST}"
         echo "Verifying: $VERIFY_SUBJECT"
@@ -130,22 +147,17 @@ else
     echo "📝 Updating existing .env file..."
 fi
 
-# Update HOST_IP
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    sed -i '' "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
-    sed -i '' "s/^N8N_IMAGE_VERSION=.*/N8N_IMAGE_VERSION=$N8N_VERSION/" .env
-else
-    sed -i "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
-    sed -i "s/^N8N_IMAGE_VERSION=.*/N8N_IMAGE_VERSION=$N8N_VERSION/" .env
-fi
+SED_CMD="sed -i"
+[[ "$OSTYPE" == "darwin"* ]] && SED_CMD="sed -i ''"
 
-# Write the immutable digest (the runtime uses this — not the tag)
+$SED_CMD "s/^HOST_IP=.*/HOST_IP=$FINAL_IP/" .env
+$SED_CMD "s/^N8N_IMAGE_VERSION=.*/N8N_IMAGE_VERSION=$N8N_VERSION/" .env
+$SED_CMD "s/^MEM_LIMIT=.*/MEM_LIMIT=$MEM_LIMIT/" .env
+$SED_CMD "s/^CPU_LIMIT=.*/CPU_LIMIT=$CPU_LIMIT/" .env
+$SED_CMD "s/^PIDS_LIMIT=.*/PIDS_LIMIT=$PIDS_LIMIT/" .env
+
 if [ -n "$GHCR_DIGEST" ]; then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
-    else
-        sed -i "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
-    fi
+    $SED_CMD "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
     echo "✅ Digest written to .env — Docker will run the exact attested image."
 fi
 
@@ -162,7 +174,7 @@ sleep 5
 
 if docker ps | grep -q "n8n-trusted"; then
     echo ""
-    echo "🎉 SUCCESS! n8n ${N8N_VERSION} deployed from digest ${GHCR_DIGEST:-<tag>}."
+    echo "🎉 SUCCESS! n8n ${N8N_VERSION} deployed."
     echo "============================================="
     echo "🔗 Access your n8n instance at:"
     echo "http://$FINAL_IP:5678"

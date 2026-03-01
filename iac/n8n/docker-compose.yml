@@ -28,11 +28,11 @@ services:
     # Run as the non-root node user shipped in the official n8n image (uid=1000)
     user: "1000:1000"
 
-    # Resource limits — cap blast radius in the event of a compromise or runaway
-    pids_limit: 200
-    mem_limit: 1g
-    memswap_limit: 1g # disables swap (mem_limit == memswap_limit)
-    cpus: "1.0"
+    # Resource limits — configurable via .env (set by install.sh or manually)
+    pids_limit: ${PIDS_LIMIT:-200}
+    mem_limit: ${MEM_LIMIT:-1g}
+    memswap_limit: ${MEM_LIMIT:-1g} # disables swap (equal to mem_limit)
+    cpus: "${CPU_LIMIT:-1.0}"
 
     # ── Environment ───────────────────────────────────────────────────────────
     environment:

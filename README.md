@@ -3,194 +3,194 @@
 [![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 
----
+A reference implementation of how an enterprise team should securely ingest, verify, and deploy vendor-supplied container images — illustrated with [n8n](https://n8n.io).
 
-## 🎯 Purpose & Context
-
-Most enterprise security teams focus on securing internally built images but overlook a critical blind spot: **vendor-supplied images pulled directly from public registries like Docker Hub**.
-
-When teams run `docker pull n8nio/n8n:latest` on a production server, they are:
-- ❌ Trusting an external party with no internal verification
-- ❌ Using a mutable tag that can silently change
-- ❌ Skipping vulnerability and exploit checks
-- ❌ Leaving no audit trail of what was deployed and when
-
-This repository is a **reference implementation** that demonstrates how an enterprise security team should handle the ingestion, verification, and promotion of vendor-supplied container images before they ever reach production infrastructure.
-
-> **Illustrated use case**: [n8n](https://n8n.io) — a workflow automation platform. The same pipeline pattern applies to any vendor image (Dify, Grafana, Keycloak, etc.).
+> Most teams run `docker pull vendor/image:latest` in production with no verification. This repository demonstrates the controls that should exist between an upstream public registry and a production host.
 
 ---
 
-## 🏗️ Architecture Overview
+## 1. Threat Model
+
+| Threat | Description |
+|--------|-------------|
+| **Mutable tags** | `:latest` and named tags can silently change content under the same name |
+| **Unknown provenance** | No guarantee the image came from the legitimate vendor — supply chain tampering |
+| **No audit trail** | No record of what version was running, when it was deployed, or who approved it |
+| **Delayed CVE exposure** | A clean image becomes vulnerable as new CVEs are published after promotion |
+| **Runtime escape** | An exploited container can escalate or persist if the host is not hardened |
+
+---
+
+## 2. Controls Mapped to Threats
+
+| Threat | Control | Implementation |
+|--------|---------|----------------|
+| Mutable tags | **Digest pinning** | Docker Hub SHA256 resolved at ingestion; host deploys `@sha256:…`, never a tag |
+| Unknown provenance | **SLSA Provenance attestation** | `actions/attest-build-provenance` attaches a cryptographically signed provenance record to every promoted image |
+| Unknown provenance | **Upstream cosign check** | Pipeline checks for vendor Sigstore signatures; documents risk gap if absent |
+| Unknown provenance | **Source allowlist** | Only `n8nio/n8n` with strict `x.y.z` semver tags permitted — enforced via `policy/promotion-policy.yml` |
+| No audit trail | **SBOM generation** | Syft generates a full SPDX SBOM for every promoted image, attested to GHCR |
+| No audit trail | **Versioned GitHub Releases** | Every promotion creates an immutable release with digest-pinned pull commands and rollback steps |
+| Known CVEs | **Trivy CVE scan** | All severities (CRITICAL → LOW) scanned at promotion time |
+| Exploited-in-wild CVEs | **CISA KEV cross-reference** | Any CVE matching the CISA Known Exploited Vulnerabilities catalogue triggers the approval gate, regardless of severity |
+| Risk acceptance | **Approval gate** | Blocked images require human review via `trusted-promotion` GitHub Environment before promotion |
+| Delayed CVE exposure | **Weekly re-scan** | Scheduled job re-scans all promoted GHCR images; opens a GitHub Issue if a previously clean image acquires new findings |
+| Host-level integrity | **Host verification** | `install.sh` runs `gh attestation verify` against the exact digest before deploying |
+| Runtime escape | **Container hardening** | `read_only`, `no-new-privileges`, `cap_drop: ALL`, non-root user, tmpfs, resource limits |
+
+---
+
+## 3. Pipeline Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CI/CD PIPELINE                           │
-│                                                                 │
-│  Developer / Scheduler                                          │
-│       │                                                         │
-│       ▼  trigger: workflow_dispatch (explicit version required) │
-│  ┌──────────────┐                                               │
-│  │  Scan Job    │                                               │
-│  │              │                                               │
-│  │ 1. Resolve   │  Fetch SHA256 digest from Docker Hub API      │
-│  │    Digest    │  → pull by digest (immutable, tamper-proof)   │
-│  │              │                                               │
-│  │ 2. CVE Scan  │  Trivy scans ALL severities (CRIT/HIGH/MED/LOW)│
-│  │              │                                               │
-│  │ 3. KEV Check │  Cross-reference with CISA KEV catalogue      │
-│  │              │  (any severity in KEV = escalated risk)       │
-│  └──────┬───────┘                                               │
-│         │                                                       │
-│    ┌────┴──────────────────────────────────────┐               │
-│    │                                            │               │
-│    ▼ Clean image                                ▼ CRIT/HIGH or KEV hit
-│  ┌──────────────┐                        ┌─────────────────┐   │
-│  │ Auto-Promote │                        │ Manual Approval │   │
-│  │              │                        │ (human reviews  │   │
-│  │ Push to GHCR │                        │ scan report)    │   │
-│  └──────┬───────┘                        └────────┬────────┘   │
-│         └────────────────┬───────────────────────┘            │
-│                          ▼                                      │
-│              ┌───────────────────────┐                          │
-│              │  Attest & Release     │                          │
-│              │                       │                          │
-│              │ • SLSA Provenance     │                          │
-│              │ • SBOM attestation    │                          │
-│              │ • GitHub Release      │                          │
-│              │   (digest-pinned ref) │                          │
-│              └───────────────────────┘                          │
-└─────────────────────────────────────────────────────────────────┘
+  Developer / Scheduler
+       │
+       ▼  workflow_dispatch (explicit version or "latest" auto-resolved)
+  ┌─────────────────────────────────────────────────────────┐
+  │                     SCAN JOB                            │
+  │  1. Policy check   → allowlist + semver enforcement     │
+  │  2. Cosign check   → vendor signature or risk-gap log   │
+  │  3. Digest resolve → immutable SHA256 from Docker Hub   │
+  │  4. Trivy scan     → CRITICAL/HIGH/MEDIUM/LOW CVEs      │
+  │  5. KEV check      → CISA catalogue cross-reference     │
+  └──────┬──────────────────────────────────────┬───────────┘
+         │ Clean                                │ CRIT/HIGH or KEV hit
+         ▼                                      ▼
+  ┌──────────────┐                     ┌─────────────────────┐
+  │ Auto-Promote │                     │  Manual Approval    │
+  │ (no gate)    │                     │  (trusted-promotion │
+  └──────┬───────┘                     │   environment)      │
+         └──────────────┬──────────────┴─────────────────────┘
+                        ▼
+            ┌───────────────────────┐
+            │  Attest & Release     │
+            │  • SLSA Provenance    │
+            │  • SBOM attestation   │
+            │  • GitHub Release     │
+            │    digest + rollback  │
+            └───────────────────────┘
 
-              ↓ deploy
-
-┌──────────────────────────────────────────────────────┐
-│                      HOST VM                         │
-│                                                      │
-│  install.sh                                          │
-│   1. Detects host IP                                 │
-│   2. Verifies SLSA provenance via GitHub CLI (gh)    │
-│      → abort if tampered or not from pipeline        │
-│   3. docker compose up -d                            │
-└──────────────────────────────────────────────────────┘
+  Every Monday (rescan.yml):
+  Re-scan all GHCR releases → open GitHub Issue if new findings
 ```
 
 ---
 
-## 🛡️ Security Controls Implemented
-
-| Control | Tool / Mechanism | Purpose |
-|---------|-----------------|---------|
-| **Immutable Image Pinning** | SHA256 digest from Docker Hub Manifest API | Eliminates mutable tag risk (`latest` banned) |
-| **CVE Vulnerability Scan** | [Trivy](https://trivy.dev) — all severities | Detects known vulnerabilities before promotion |
-| **CISA KEV Cross-Reference** | [CISA KEV catalogue](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | Flags CVEs actively exploited in the wild — even if MEDIUM or LOW severity |
-| **Conditional Approval Gate** | GitHub Environments (`trusted-promotion`) | Any CRITICAL/HIGH or KEV match requires human sign-off |
-| **IaC & Secret Scanning** | Trivy `fs` scan on every commit/PR | Catches misconfigurations and leaked secrets before merge |
-| **SLSA Build Provenance** | `actions/attest-build-provenance` | Cryptographically proves the image was built by this pipeline |
-| **SBOM Generation** | Syft via `anchore/sbom-action` | Full software inventory for auditing and compliance |
-| **Version Control & Rollback** | GitHub Releases with digest-pinned refs | Every promoted image has an immutable rollback reference |
-| **Host Verification** | `gh attestation verify` in `install.sh` | Proves to the VM that the image originated from this pipeline |
-
----
-
-## 📁 Repository Structure
+## 4. Repository Structure
 
 ```
 .
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                  # Pre-merge: IaC misconfiguration & secret scan
-│       └── image-promotion.yml     # Vendor image ingestion & promotion pipeline
+├── policy/
+│   └── promotion-policy.yml      # Policy-as-code: allowlist, block rules, exception handling
 │
-└── iac/
-    └── n8n/
-        ├── docker-compose.yml      # Container stack definition
-        ├── .env.template           # Environment template (copy to .env)
-        └── install.sh              # Interactive setup & host verification script
+├── .github/workflows/
+│   ├── ci.yml                    # Pre-merge: IaC misconfiguration & secret scan on every push/PR
+│   ├── image-promotion.yml       # Vendor image ingestion, scanning, attestation, and promotion
+│   └── rescan.yml                # Scheduled weekly re-scan of promoted images
+│
+└── iac/n8n/
+    ├── docker-compose.yml        # Hardened container stack (read-only FS, no-root, resource limits)
+    ├── .env.template             # Environment template — copy to .env and populate
+    └── install.sh                # Interactive setup: version selection, digest fetch, provenance verify, deploy
 ```
 
 ---
 
-## 🚀 How to Run
+## 5. Operational Playbooks
 
-### Step 1 — One-Time GitHub Setup
-
-1. Go to **Settings → Environments** → **New environment** → name it `trusted-promotion`
-2. Enable **Required reviewers** and add yourself as a reviewer
-3. Go to **Settings → Actions → General → Workflow permissions**
-4. Select **Read and write permissions**
-5. Go to **Packages** → find `n8n-trusted` → **Package Settings → Change visibility → Public**
-
-### Step 2 — Promote a Trusted Image
+### 5a. Promotion Runbook
 
 1. Go to **Actions → Image Promotion (Trusted Source) → Run workflow**
-2. Enter an **explicit version** (e.g. `1.55.3`) — `latest` is not accepted
-3. The pipeline will:
-   - Resolve the image's immutable SHA256 digest
-   - Scan for vulnerabilities (all severities)
-   - Cross-check against CISA KEV
-   - **Auto-promote** if clean — OR **pause for your approval** if CRITICAL/HIGH or KEV match found
-   - On success: attest provenance + SBOM, create a GitHub Release with rollback info
+2. Enter a version (e.g. `1.55.3`) or leave blank to auto-resolve latest
+3. The pipeline runs: policy check → cosign → digest pin → Trivy → KEV
+4. **If clean**: promotes automatically → creates GitHub Release with digest and rollback info
+5. **If CRITICAL/HIGH or KEV match**: pipeline pauses for approval
+   - Download the `scan-report-<version>` artifact from the run summary
+   - Review `trivy-summary.txt` and `vendor-sig-check.txt`
+   - Go to **Review deployments** → Approve (accept risk) or Reject
+   - Approved images are promoted with a `⚠️ Manually Approved` release label
 
-### Step 3 — Deploy to Host VM
+### 5b. Exception / Waiver Process
+
+When approving a vulnerable image:
+1. Download and retain the `scan-report-<version>` artifact as evidence
+2. Document the accepted risk (CVE IDs, severity, KEV status, business justification) in the GitHub Release notes
+3. Set a **review deadline** — a date by which either a patched version must be deployed or the exception formally renewed
+4. Update `policy/promotion-policy.yml` comments if the exception changes policy intent
+
+### 5c. Rollback Procedure
+
+Every GitHub Release contains the exact digest-pinned reference for that version.
 
 ```bash
-# Clone the repository on your VM
+# On the host VM — edit .env with values from the target GitHub Release
+nano iac/n8n/.env
+
+# Set:
+N8N_IMAGE_VERSION=<previous-version>      # e.g. 1.54.0
+N8N_IMAGE_DIGEST=sha256:<digest-from-release>
+
+# Apply
+docker compose up -d
+```
+
+Or re-run `install.sh` and enter the target version when prompted.
+
+### 5d. Re-Scan and Patch Cadence
+
+| Trigger | Action |
+|---------|--------|
+| Weekly Monday 00:00 UTC (automated) | `rescan.yml` re-scans all promoted GHCR images + KEV; opens GitHub Issue if findings change |
+| GitHub Issue opened by re-scan | Review findings; promote a newer clean version or document exception |
+| CISA KEV catalogue updated with a new CVE matching a deployed version | Issue opened automatically on next Monday; treat as P1 — promote or rollback within SLA |
+| New n8n release published by vendor | Run the promotion pipeline manually for the new version |
+
+---
+
+## 6. One-Time GitHub Setup
+
+1. **Settings → Environments → New environment** → name it `trusted-promotion`
+2. Enable **Required reviewers**, add yourself
+3. **Settings → Actions → General → Workflow permissions** → **Read and write permissions**
+4. **Packages → `n8n-trusted` → Package Settings → Change visibility → Public**
+   (required for OCI attestation push; the repository itself is not affected)
+
+---
+
+## 7. Deploying to a Host
+
+```bash
+# Clone on the VM
 git clone https://github.com/svveec0d3/secure-deploy.git
 cd secure-deploy/iac/n8n
 
-# Install GitHub CLI for provenance verification (recommended)
+# Install GitHub CLI for provenance verification (strongly recommended)
 # https://github.com/cli/cli#installation
 gh auth login
 
-# Run the setup script
+# Run the interactive setup script
 chmod +x install.sh
 ./install.sh
+# Prompts: Host IP, version, memory/cpu/pids limits, provenance verification
 ```
 
-The `install.sh` script will:
-- Detect your VM's IP address (with option to override)
-- Optionally verify the image's cryptographic provenance against GitHub's attestation store
-- Deploy the container via Docker Compose
-- Print the access URL
+The script will:
+- Detect your host IP
+- Let you choose version (or auto-resolve latest)
+- Prompt for container resource limits with safe defaults
+- Fetch the image digest from the GitHub Release
+- Verify provenance against the **exact digest** before deploying
+- Write all values to `.env` and start the container
 
-### Step 4 — Rolling Back to a Previous Version
-
-All promoted versions are listed under [Releases](https://github.com/svveec0d3/secure-deploy/releases).
-
-Each release contains the exact digest-pinned pull command. To rollback:
-
-1. Find the release version you want (e.g. `1.54.0`)
-2. On your VM, edit `iac/n8n/.env`:
-   ```
-   N8N_IMAGE_VERSION=1.54.0
-   ```
-3. Run:
-   ```bash
-   docker compose pull && docker compose up -d
-   ```
+**Automation mode** (CI/CD, no prompts):
+```bash
+./install.sh --skip-verify
+```
 
 ---
 
-## 📋 Approval Gate Logic
+## 8. Security Policy
 
-```
-CRITICAL or HIGH CVE detected?    → YES → Manual Approval Required ⚠️
-              ↓ NO
-Any CVE (any severity) in KEV?    → YES → Manual Approval Required ⚠️
-              ↓ NO
-         Auto-Promote ✅
-```
-
-Reviewers will find a detailed `scan-report-<version>` artifact attached to the workflow run containing:
-- Full CVE list split by CRITICAL/HIGH and MEDIUM/LOW
-- CISA KEV matches with vendor details and descriptions
-- The pinned source digest
-
----
-
-## 🔒 Security Policy
-
-- Images **must** originate from `ghcr.io/svveec0d3/secure-deploy/*` — never pulled directly from Docker Hub on the host
-- Every production image must have a corresponding [GitHub Release](https://github.com/svveec0d3/secure-deploy/releases) with attested SLSA provenance and SBOM
-- The `trusted-promotion` environment ensures a human reviewed the risk before any vulnerable or KEV-matched image is promoted
+- Images **must** originate from `ghcr.io/svveec0d3/secure-deploy/*` — never pulled directly from Docker Hub on production hosts
+- All production images must have a corresponding [GitHub Release](https://github.com/svveec0d3/secure-deploy/releases) with attested SLSA provenance and SBOM
+- Promotion policy is defined in [`policy/promotion-policy.yml`](policy/promotion-policy.yml) — changes require a reviewed PR
