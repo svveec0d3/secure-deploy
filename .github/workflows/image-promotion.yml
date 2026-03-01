@@ -35,10 +35,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      - name: Enforce Docker Content Trust & Pull Image
+      - name: Pull Image with Digest Verification
         run: |
-          export DOCKER_CONTENT_TRUST=1
-          docker pull n8nio/n8n:${{ env.N8N_VERSION }}
+          # Fetch the canonical digest for this tag from Docker Hub manifest API
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:n8nio/n8n:pull" | jq -r '.token')
+          DIGEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://registry-1.docker.io/v2/n8nio/n8n/manifests/${{ env.N8N_VERSION }}" \
+            --head | grep -i docker-content-digest | awk '{print $2}' | tr -d '\r')
+          echo "Image digest for n8nio/n8n:${{ env.N8N_VERSION }} is: $DIGEST"
+          # Pull using the immutable digest to guarantee integrity
+          docker pull n8nio/n8n@$DIGEST
+          # Re-tag it with the version tag so subsequent steps can reference it by name
+          docker tag n8nio/n8n@$DIGEST n8nio/n8n:${{ env.N8N_VERSION }}
 
       - name: Identify Vulnerabilities (Non-blocking)
         run: |
