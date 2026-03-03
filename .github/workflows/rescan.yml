@@ -74,7 +74,6 @@ jobs:
                 --format json \
                 --output "rescan-$VERSION.json" \
                 --severity CRITICAL,HIGH,MEDIUM,LOW \
-                --ignore-unfixed \
                 "$IMAGE" || true
 
               # Run Trivy against the pulled image (SARIF for GitHub Security)
@@ -82,7 +81,6 @@ jobs:
                 --format sarif \
                 --output "sarifs/rescan-$VERSION.sarif" \
                 --severity CRITICAL,HIGH,MEDIUM,LOW \
-                --ignore-unfixed \
                 "$IMAGE" || true
             else
               # Run Trivy against the downloaded SBOM (JSON for our alerts)
@@ -90,7 +88,6 @@ jobs:
                 --format json \
                 --output "rescan-$VERSION.json" \
                 --severity CRITICAL,HIGH,MEDIUM,LOW \
-                --ignore-unfixed \
                 "sbom-$VERSION.json" || true
 
               # Run Trivy against the downloaded SBOM (SARIF for GitHub Security)
@@ -98,7 +95,6 @@ jobs:
                 --format sarif \
                 --output "sarifs/rescan-$VERSION.sarif" \
                 --severity CRITICAL,HIGH,MEDIUM,LOW \
-                --ignore-unfixed \
                 "sbom-$VERSION.json" || true
             fi
 

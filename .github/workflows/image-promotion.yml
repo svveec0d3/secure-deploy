@@ -124,7 +124,6 @@ jobs:
             --format json \
             --output trivy-report.json \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
-            --ignore-unfixed \
             n8nio/n8n:${{ env.N8N_VERSION }}
 
           # Generate SARIF format for GitHub Security integration
@@ -132,7 +131,6 @@ jobs:
             --format sarif \
             --output trivy-results.sarif \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
-            --ignore-unfixed \
             n8nio/n8n:${{ env.N8N_VERSION }} || true
 
           # Human-readable summary
@@ -268,7 +266,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           push-to-registry: true
-          show-summary: true
+          show-summary: false
 
       - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
@@ -284,7 +282,12 @@ jobs:
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           sbom-path: './sbom.spdx.json'
           push-to-registry: true
-          show-summary: true
+          show-summary: false
+
+      - name: Add Attestations Summary
+        run: |
+          echo "### 🛡️ Security Attestations" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **SLSA Build Provenance** and **SBOM** have been securely attested to the image digest \`${{ steps.docker_push.outputs.digest }}\`." >> $GITHUB_STEP_SUMMARY
 
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
@@ -356,7 +359,7 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}/n8n-trusted
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           push-to-registry: true
-          show-summary: true
+          show-summary: false
 
       - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
@@ -372,7 +375,12 @@ jobs:
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           sbom-path: './sbom.spdx.json'
           push-to-registry: true
-          show-summary: true
+          show-summary: false
+
+      - name: Add Attestations Summary
+        run: |
+          echo "### 🛡️ Security Attestations" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **SLSA Build Provenance** and **SBOM** have been securely attested to the image digest \`${{ steps.docker_push.outputs.digest }}\`." >> $GITHUB_STEP_SUMMARY
 
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
