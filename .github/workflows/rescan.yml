@@ -117,9 +117,10 @@ jobs:
         if: steps.rescan.outputs.alert_found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ALERT_BODY: ${{ steps.rescan.outputs.alert_body }}
         run: |
-          ISSUE_TITLE="🚨 Re-Scan Alert: Previously promoted image(s) have new vulnerability findings"
-          ISSUE_BODY="## Weekly Re-Scan Alert
+          cat << EOF > issue_body.md
+          ## Weekly Re-Scan Alert
 
           One or more previously promoted images now have **new CRITICAL/HIGH CVEs or CISA KEV matches**.
 
@@ -127,13 +128,17 @@ jobs:
           1. Promote a newer clean version via the Image Promotion pipeline
           2. Revoke the affected image from deployment (update \`N8N_IMAGE_DIGEST\` on hosts)
 
-          ${{ steps.rescan.outputs.alert_body }}
+          $ALERT_BODY
 
           ---
-          *Triggered by the weekly re-scan job on $(date -u '+%Y-%m-%d')*"
+          *Triggered by the weekly re-scan job on $(date -u '+%Y-%m-%d')*
+          EOF
+
+          # Create the 'security' label if it doesn't already exist
+          gh label create security --color "FF0000" --force || true
 
           gh issue create \
             --repo "${{ github.repository }}" \
-            --title "$ISSUE_TITLE" \
-            --body "$ISSUE_BODY" \
+            --title "🚨 Re-Scan Alert: Previously promoted image(s) have new vulnerability findings" \
+            --body-file issue_body.md \
             --label "security"
