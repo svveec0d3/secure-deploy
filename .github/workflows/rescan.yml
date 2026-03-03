@@ -59,27 +59,48 @@ jobs:
 
             echo "--- Re-scanning n8n-trusted:$VERSION ---"
 
-            # Try to download the attached SBOM; skip if the release has no SBOM
+            # Try to download the attached SBOM
             if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
-              echo "  ⚠️  Could not download SBOM for $TAG — skipping"
-              continue
+              echo "  ⚠️  Could not download SBOM for $TAG — falling back to full image scan"
+              
+              IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
+              if ! docker pull "$IMAGE" > /dev/null 2>&1; then
+                echo "  ⚠️  Could not pull $IMAGE either — skipping"
+                continue
+              fi
+              
+              # Run Trivy against the pulled image (JSON for our alerts)
+              trivy image \
+                --format json \
+                --output "rescan-$VERSION.json" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW \
+                --ignore-unfixed \
+                "$IMAGE" || true
+
+              # Run Trivy against the pulled image (SARIF for GitHub Security)
+              trivy image \
+                --format sarif \
+                --output "sarifs/rescan-$VERSION.sarif" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW \
+                --ignore-unfixed \
+                "$IMAGE" || true
+            else
+              # Run Trivy against the downloaded SBOM (JSON for our alerts)
+              trivy sbom \
+                --format json \
+                --output "rescan-$VERSION.json" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW \
+                --ignore-unfixed \
+                "sbom-$VERSION.json" || true
+
+              # Run Trivy against the downloaded SBOM (SARIF for GitHub Security)
+              trivy sbom \
+                --format sarif \
+                --output "sarifs/rescan-$VERSION.sarif" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW \
+                --ignore-unfixed \
+                "sbom-$VERSION.json" || true
             fi
-
-            # Run Trivy against the downloaded SBOM (JSON for our alerts)
-            trivy sbom \
-              --format json \
-              --output "rescan-$VERSION.json" \
-              --severity CRITICAL,HIGH,MEDIUM,LOW \
-              --ignore-unfixed \
-              "sbom-$VERSION.json" || true
-
-            # Run Trivy against the downloaded SBOM (SARIF for GitHub Security)
-            trivy sbom \
-              --format sarif \
-              --output "sarifs/rescan-$VERSION.sarif" \
-              --severity CRITICAL,HIGH,MEDIUM,LOW \
-              --ignore-unfixed \
-              "sbom-$VERSION.json" || true
 
             # Check for CRITICAL/HIGH CVEs
             HAS_CRIT_HIGH=false
