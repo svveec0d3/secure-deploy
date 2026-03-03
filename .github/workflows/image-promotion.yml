@@ -269,7 +269,6 @@ jobs:
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           push-to-registry: true
           show-summary: true
-          summary-title: "SLSA Build Provenance Attested"
 
       - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
@@ -286,7 +285,6 @@ jobs:
           sbom-path: './sbom.spdx.json'
           push-to-registry: true
           show-summary: true
-          summary-title: "SBOM Attestation Created"
 
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
@@ -359,7 +357,6 @@ jobs:
           subject-digest: ${{ steps.docker_push.outputs.digest }}
           push-to-registry: true
           show-summary: true
-          summary-title: "SLSA Build Provenance Attested"
 
       - name: Generate SBOM from local image
         uses: anchore/sbom-action@v0
@@ -376,7 +373,6 @@ jobs:
           sbom-path: './sbom.spdx.json'
           push-to-registry: true
           show-summary: true
-          summary-title: "SBOM Attestation Created"
 
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
