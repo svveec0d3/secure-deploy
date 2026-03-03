@@ -34,7 +34,7 @@ A reference implementation that shows **how to securely ingest, verify and deplo
 | Delayed CVE exposure | **CISA KEV cross‑reference** | Automated check against known‑exploited CVE list. | Blocks actively exploited vulnerabilities. | **Level 2** |
 | Runtime escape | **CIS Docker Benchmark v1.6.0 (Section 5)** | Enforced via `policy/runtime‑hardening‑policy.yml` – read‑only FS, `no‑new‑privileges`, `cap_drop: ALL`, AppArmor, non‑root user, resource limits, custom network. | Reduces blast radius, enforces least privilege. | **Level 2** |
 | Operational gaps | **Approval gate** | `trusted‑promotion` environment requires manual review for flagged images. | Human risk acceptance decision. | **Level 2** |
-| Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans all promoted images; opens issue on new findings. | Continuous compliance monitoring. | **Level 2** |
+| Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans the SBOM of all promoted releases; opens issue on new findings. | Continuous compliance monitoring. | **Level 2** |
 | Operational gaps | **Host verification script** | `install.sh` runs `gh attestation verify` against exact digest before deployment. | Guarantees host runs the exact promoted image. | **Level 3** |
 
 **SLSA Maturity**: This repository demonstrates **SLSA Level 3**. By generating signed provenance attestations for every promoted image, pinning digests, and publishing reproducible SBOMs, it meets the requirements for automated provenance verification and reproducible builds, which are the hallmarks of Level 3.
@@ -57,6 +57,7 @@ flowchart TD
     I --> K[Attest Provenance & SBOM]
     J --> K
     K --> L[GitHub Release + Rollback Info]
+    L -.->|SBOM used for| M{Weekly Re-scan}
 ```
 
 * **Auto‑Promote** – No findings, image is pushed to GHCR and released.
@@ -78,7 +79,7 @@ flowchart TD
 ├── .github/workflows/
 │   ├── ci.yml               # Pre‑merge: IaC & secret scan + CIS compliance (blocks on findings)
 │   ├── image‑promotion.yml  # Vendor image ingestion, scanning, attestation, promotion
-│   └── rescan.yml           # Weekly re‑scan of all promoted images
+│   └── rescan.yml           # Weekly re‑scan of promoted release SBOMs
 │
 └── iac/n8n/
     ├── docker-compose.yml   # CIS‑hardened stack (read‑only FS, non‑root, AppArmor, limits)
@@ -118,7 +119,7 @@ Or re‑run `install.sh` and supply the target version when prompted.
 ### ⏱️ Re‑Scan & Patch Cadence
 | Trigger | Action |
 |---------|--------|
-| Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans all GHCR images; opens a GitHub Issue on new findings |
+| Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans the SBOM of all promoted releases; opens a GitHub Issue on new findings |
 | New CVE in CISA KEV list | Issue opened automatically on next scan – treat as P1 |
 | New vendor release | Run promotion pipeline manually |
 

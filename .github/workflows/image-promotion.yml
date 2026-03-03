@@ -272,6 +272,7 @@ jobs:
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
+          files: ./sbom.spdx.json
           tag_name: n8n-${{ needs.scan-images.outputs.resolved_version }}
           name: "n8n ${{ needs.scan-images.outputs.resolved_version }} (Trusted)"
           body: |
@@ -357,6 +358,7 @@ jobs:
       - name: Create GitHub Release with rollback info
         uses: softprops/action-gh-release@v2
         with:
+          files: ./sbom.spdx.json
           tag_name: n8n-${{ needs.scan-images.outputs.resolved_version }}
           name: "n8n ${{ needs.scan-images.outputs.resolved_version }} (Manually Approved — Vulnerabilities Present)"
           body: |

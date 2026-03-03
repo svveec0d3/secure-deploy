@@ -57,21 +57,19 @@ jobs:
 
             echo "--- Re-scanning n8n-trusted:$VERSION ---"
 
-            IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
-
-            # Try to pull; skip if the image no longer exists
-            if ! docker pull "$IMAGE" > /dev/null 2>&1; then
-              echo "  ⚠️  Could not pull $IMAGE — skipping"
+            # Try to download the attached SBOM; skip if the release has no SBOM
+            if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
+              echo "  ⚠️  Could not download SBOM for $TAG — skipping"
               continue
             fi
 
-            # Run Trivy against the pulled image
-            trivy image \
+            # Run Trivy against the downloaded SBOM
+            trivy sbom \
               --format json \
               --output "rescan-$VERSION.json" \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --ignore-unfixed \
-              "$IMAGE" || true
+              "sbom-$VERSION.json" || true
 
             # Check for CRITICAL/HIGH CVEs
             HAS_CRIT_HIGH=false
