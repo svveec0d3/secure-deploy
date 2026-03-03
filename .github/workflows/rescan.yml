@@ -15,6 +15,7 @@ jobs:
       contents: read
       packages: read
       issues: write         # Needed to open alert issues
+      security-events: write
 
     steps:
       - name: Checkout repository
@@ -47,6 +48,7 @@ jobs:
         run: |
           ALERT_BODY=""
           ALERT_FOUND=false
+          mkdir -p sarifs
 
           # List all GitHub Releases in this repo
           RELEASES=$(gh release list --repo ${{ github.repository }} --limit 20 --json tagName,name | jq -r '.[].tagName')
@@ -63,10 +65,18 @@ jobs:
               continue
             fi
 
-            # Run Trivy against the downloaded SBOM
+            # Run Trivy against the downloaded SBOM (JSON for our alerts)
             trivy sbom \
               --format json \
               --output "rescan-$VERSION.json" \
+              --severity CRITICAL,HIGH,MEDIUM,LOW \
+              --ignore-unfixed \
+              "sbom-$VERSION.json" || true
+
+            # Run Trivy against the downloaded SBOM (SARIF for GitHub Security)
+            trivy sbom \
+              --format sarif \
+              --output "sarifs/rescan-$VERSION.sarif" \
               --severity CRITICAL,HIGH,MEDIUM,LOW \
               --ignore-unfixed \
               "sbom-$VERSION.json" || true
@@ -142,3 +152,9 @@ jobs:
             --title "🚨 Re-Scan Alert: Previously promoted image(s) have new vulnerability findings" \
             --body-file issue_body.md \
             --label "security"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'sarifs/'

@@ -21,6 +21,7 @@ jobs:
       resolved_version: ${{ steps.fetch-digest.outputs.version }}
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -126,6 +127,14 @@ jobs:
             --ignore-unfixed \
             n8nio/n8n:${{ env.N8N_VERSION }}
 
+          # Generate SARIF format for GitHub Security integration
+          trivy image \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity CRITICAL,HIGH,MEDIUM,LOW \
+            --ignore-unfixed \
+            n8nio/n8n:${{ env.N8N_VERSION }} || true
+
           # Human-readable summary
           echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
           echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
@@ -141,6 +150,12 @@ jobs:
             .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity=="MEDIUM" or .Severity=="LOW") |
             "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
           else "None." end' trivy-report.json >> trivy-summary.txt
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Check CISA KEV (Known Exploited Vulnerabilities)
         id: kev-check
