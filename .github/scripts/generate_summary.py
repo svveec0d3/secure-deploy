@@ -13,6 +13,21 @@ import sys
 
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
 
+SEVERITY_EMOJI = {
+    "CRITICAL": "🔴",
+    "HIGH": "🟠",
+    "MEDIUM": "🟡",
+    "LOW": "🔵",
+    "UNKNOWN": "⚪",
+}
+
+
+def fmt_date(raw: str) -> str:
+    """Trim ISO8601 datetime to YYYY-MM-DD, or return '-' if missing."""
+    if not raw:
+        return "-"
+    return raw[:10]
+
 
 def main():
     if len(sys.argv) < 4:
@@ -50,16 +65,18 @@ def main():
     if not vulns:
         lines.append("\u2705 No vulnerabilities found.")
     else:
-        lines.append("| CVE | Severity | Package | Version | Fixed In | KEV |")
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- |")
+        lines.append("| CVE | Severity | Published | Package | Version | Fixed In | KEV |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for v in vulns:
-            cve_id = v.get("VulnerabilityID", "")
+            cve_id   = v.get("VulnerabilityID", "")
             severity = v.get("Severity", "")
-            pkg = v.get("PkgName", "")
+            emoji    = SEVERITY_EMOJI.get(severity, "")
+            pub_date = fmt_date(v.get("PublishedDate", ""))
+            pkg      = v.get("PkgName", "")
             installed = v.get("InstalledVersion", "")
-            fixed = v.get("FixedVersion") or "None"
-            kev = "\u2705 Yes" if cve_id in kev_ids else "No"
-            lines.append(f"| {cve_id} | {severity} | {pkg} | {installed} | {fixed} | {kev} |")
+            fixed    = v.get("FixedVersion") or "None"
+            kev      = "\u2705 Yes" if cve_id in kev_ids else "No"
+            lines.append(f"| {cve_id} | {emoji} {severity} | {pub_date} | {pkg} | {installed} | {fixed} | {kev} |")
 
     lines.append("")
     lines.append("---")
@@ -68,7 +85,8 @@ def main():
     with open(summary_path, "a") as f:
         f.write("\n".join(lines) + "\n")
 
-    print(f"Summary written: {len(vulns)} vulnerabilities, {sum(1 for v in vulns if v.get('VulnerabilityID','') in kev_ids)} KEV hits")
+    kev_count = sum(1 for v in vulns if v.get("VulnerabilityID", "") in kev_ids)
+    print(f"Summary written: {len(vulns)} vulnerabilities, {kev_count} KEV hits")
 
 
 if __name__ == "__main__":
