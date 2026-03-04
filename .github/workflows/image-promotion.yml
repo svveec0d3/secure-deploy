@@ -131,26 +131,28 @@ jobs:
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+          # Create per-version branch via GitHub API (no local checkout — preserves workspace files)
+          BRANCH="n8n-$VERSION"
+          BRANCH_SHA="${{ github.sha }}"
+          EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/$BRANCH")
+          if [ "$EXISTING" = "200" ]; then
+            echo "Branch $BRANCH already exists"
+          else
+            echo "Creating branch $BRANCH at $BRANCH_SHA"
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs" \
+              -d "{\"ref\": \"refs/heads/$BRANCH\", \"sha\": \"$BRANCH_SHA\"}" | jq '.ref'
+          fi
+          echo "version_branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "version_branch_sha=$BRANCH_SHA" >> $GITHUB_OUTPUT
+
           # Pull by immutable digest — guarantees what we scan is what we promote
           docker pull n8nio/n8n@$DIGEST
           docker tag n8nio/n8n@$DIGEST n8nio/n8n:$VERSION
-
-          # Create per-version branch (used to anchor SARIF dedup in Security Hub)
-          BRANCH="n8n-$VERSION"
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
-            echo "Branch $BRANCH already exists — checking it out"
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-          else
-            echo "Creating branch $BRANCH"
-            git checkout -b "$BRANCH"
-            git push origin "$BRANCH"
-          fi
-          BRANCH_SHA=$(git rev-parse HEAD)
-          echo "version_branch=$BRANCH" >> $GITHUB_OUTPUT
-          echo "version_branch_sha=$BRANCH_SHA" >> $GITHUB_OUTPUT
 
       - name: Scan for CVEs (non-blocking report)
         run: |
