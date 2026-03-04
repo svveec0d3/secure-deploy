@@ -41,7 +41,7 @@ read -p "Enter the n8n version to deploy (e.g. 1.55.3, or press Enter for latest
 
 if [ -z "$USER_VERSION" ] || [ "$USER_VERSION" = "latest" ]; then
     if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
-        USER_VERSION=$(gh release list --repo svveec0d3/secure-pull --limit 20 --json tagName \
+        USER_VERSION=$(gh release list --repo svveec0d3/secure-deploy --limit 20 --json tagName \
             | jq -r '.[].tagName' | grep -E '^n8n-[0-9]+\.[0-9]+\.[0-9]+$' \
             | sed 's/^n8n-//' | sort -V | tail -1)
         echo "Resolved latest release: $USER_VERSION"
@@ -82,7 +82,7 @@ echo "---------------------------------------------"
 
 GHCR_DIGEST=""
 if command -v gh &> /dev/null && gh auth status &> /dev/null 2>&1; then
-    RELEASE_BODY=$(gh release view "$RELEASE_TAG" --repo svveec0d3/secure-pull --json body -q '.body' 2>/dev/null || echo "")
+    RELEASE_BODY=$(gh release view "$RELEASE_TAG" --repo svveec0d3/secure-deploy --json body -q '.body' 2>/dev/null || echo "")
     GHCR_DIGEST=$(echo "$RELEASE_BODY" | grep -oP 'sha256:[a-f0-9]{64}' | head -1)
 fi
 

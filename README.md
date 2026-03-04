@@ -1,7 +1,7 @@
 # 🔐 Secure Deploy – Enterprise Vendor Image Ingestion Pipeline
 
-[![CI](https://github.com/svveec0d3/secure-pull/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-pull/actions/workflows/ci.yml)
-[![Image Promotion](https://github.com/svveec0d3/secure-pull/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-pull/actions/workflows/image-promotion.yml)
+[![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
+[![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 
 A reference implementation that shows **how to securely ingest, verify and deploy vendor‑supplied container images** (demoed with [n8n](https://n8n.io)). It bundles industry‑grade best practices – **SLSA**, **CIS Docker Benchmark v1.6.0**, and **NIST SP 800‑53** – into a GitHub‑Actions CI/CD pipeline.
 
@@ -126,7 +126,7 @@ Or re‑run `install.sh` and supply the target version when prompted.
 ---
 
 ## 6️⃣ Security Policy (High‑Level)
-- **Image source**: Must be `ghcr.io/svveec0d3/secure-pull/*`; never pull directly from Docker Hub in production.
+- **Image source**: Must be `ghcr.io/svveec0d3/secure-deploy/*`; never pull directly from Docker Hub in production.
 - **SLSA provenance**: Every promoted image is signed with `actions/attest-build-provenance` (SLSA Level 3).
 - **SBOM**: Generated via Syft and attested to the registry.
 - **CIS hardening**: Enforced by `runtime‑hardening‑policy.yml` (Section 5 controls).
@@ -154,8 +154,8 @@ Or re‑run `install.sh` and supply the target version when prompted.
 ## 9️⃣ Deploying to a Host
 ```bash
 # Clone the repository on the VM
-git clone https://github.com/svveec0d3/secure-pull.git
-cd secure-pull/iac/n8n
+git clone https://github.com/svveec0d3/secure-deploy.git
+cd secure-deploy/iac/n8n
 
 # Install GitHub CLI (recommended for provenance verification)
 # https://github.com/cli/cli#installation
@@ -172,5 +172,5 @@ chmod +x install.sh
 
 *This README is version‑controlled; any changes to policies or controls must be reviewed via pull request to maintain auditability.*
 
-[![CI](https://github.com/svveec0d3/secure-pull/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-pull/actions/workflows/ci.yml)
-[![Image Promotion](https://github.com/svveec0d3/secure-pull/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-pull/actions/workflows/image-promotion.yml)
+[![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
+[![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
