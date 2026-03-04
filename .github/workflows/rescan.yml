@@ -67,27 +67,43 @@ jobs:
 
             echo "--- Re-scanning n8n-trusted:$VERSION ---"
 
-            # Always pull and scan the full GHCR image for parity with image-promotion
-            IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
-            if ! docker pull "$IMAGE" > /dev/null 2>&1; then
-              echo "  ⚠️  Could not pull $IMAGE — skipping"
-              echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
-              continue
+            # Try to download the Trivy-generated SBOM (attached to GitHub Release)
+            if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
+              echo "  ⚠️  No SBOM for $TAG — falling back to full image scan"
+
+              IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
+              if ! docker pull "$IMAGE" > /dev/null 2>&1; then
+                echo "  ⚠️  Could not pull $IMAGE either — skipping"
+                echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
+                continue
+              fi
+
+              # Full image scan as fallback (same flags as image-promotion)
+              trivy image \
+                --format json \
+                --output "rescan-$VERSION.json" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+                "$IMAGE" || true
+
+              trivy image \
+                --format sarif \
+                --output "sarifs/rescan-$VERSION.sarif" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+                "$IMAGE" || true
+            else
+              # Scan the Trivy-generated SBOM — identical results to trivy image
+              trivy sbom \
+                --format json \
+                --output "rescan-$VERSION.json" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+                "sbom-$VERSION.json" || true
+
+              trivy sbom \
+                --format sarif \
+                --output "sarifs/rescan-$VERSION.sarif" \
+                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+                "sbom-$VERSION.json" || true
             fi
-
-            # Run Trivy against the pulled image (JSON for our alerts) - same method as image-promotion
-            trivy image \
-              --format json \
-              --output "rescan-$VERSION.json" \
-              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-              "$IMAGE" || true
-
-            # Run Trivy against the pulled image (SARIF for GitHub Security)
-            trivy image \
-              --format sarif \
-              --output "sarifs/rescan-$VERSION.sarif" \
-              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-              "$IMAGE" || true
 
             # Count findings by severity for the summary table
             CRIT_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)

@@ -340,12 +340,15 @@ jobs:
           push-to-registry: true
           show-summary: false
 
-      - name: Generate SBOM from local image
-        uses: anchore/sbom-action@v0
-        with:
-          image: n8nio/n8n:${{ env.N8N_VERSION }}
-          artifact-name: sbom-${{ env.N8N_VERSION }}.spdx.json
-          output-file: ./sbom.spdx.json
+      - name: Generate SBOM with Trivy (spdx-json format, consistent with rescan)
+        run: |
+          # Use Trivy's own SBOM generation so rescan produces identical results
+          # (Syft/anchore-sbom-action uses different package discovery than Trivy)
+          trivy image \
+            --format spdx-json \
+            --output sbom.spdx.json \
+            n8nio/n8n:${{ env.N8N_VERSION }}
+          echo "SBOM generated: $(jq '.packages | length' sbom.spdx.json) packages"
 
       - name: Attest SBOM
         uses: actions/attest-sbom@v1
@@ -433,12 +436,13 @@ jobs:
           push-to-registry: true
           show-summary: false
 
-      - name: Generate SBOM from local image
-        uses: anchore/sbom-action@v0
-        with:
-          image: n8nio/n8n:${{ env.N8N_VERSION }}
-          artifact-name: sbom-${{ env.N8N_VERSION }}.spdx.json
-          output-file: ./sbom.spdx.json
+      - name: Generate SBOM with Trivy (spdx-json format, consistent with rescan)
+        run: |
+          trivy image \
+            --format spdx-json \
+            --output sbom.spdx.json \
+            n8nio/n8n:${{ env.N8N_VERSION }}
+          echo "SBOM generated: $(jq '.packages | length' sbom.spdx.json) packages"
 
       - name: Attest SBOM
         uses: actions/attest-sbom@v1
