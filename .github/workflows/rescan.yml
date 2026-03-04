@@ -213,6 +213,9 @@ jobs:
       matrix:
         version: ${{ fromJson(needs.rescan.outputs.scanned_versions) }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download SARIF artifact
         uses: actions/download-artifact@v4
         with:
