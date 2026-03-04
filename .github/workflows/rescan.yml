@@ -67,45 +67,27 @@ jobs:
 
             echo "--- Re-scanning n8n-trusted:$VERSION ---"
 
-            # Try to download the attached SBOM
-            if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
-              echo "  ⚠️  Could not download SBOM for $TAG — falling back to full image scan"
-
-              IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
-              if ! docker pull "$IMAGE" > /dev/null 2>&1; then
-                echo "  ⚠️  Could not pull $IMAGE either — skipping"
-                echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
-                continue
-              fi
-
-              # Run Trivy against the pulled image (JSON for our alerts)
-              trivy image \
-                --format json \
-                --output "rescan-$VERSION.json" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "$IMAGE" || true
-
-              # Run Trivy against the pulled image (SARIF for GitHub Security)
-              trivy image \
-                --format sarif \
-                --output "sarifs/rescan-$VERSION.sarif" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "$IMAGE" || true
-            else
-              # Run Trivy against the downloaded SBOM (JSON for our alerts)
-              trivy sbom \
-                --format json \
-                --output "rescan-$VERSION.json" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "sbom-$VERSION.json" || true
-
-              # Run Trivy against the downloaded SBOM (SARIF for GitHub Security)
-              trivy sbom \
-                --format sarif \
-                --output "sarifs/rescan-$VERSION.sarif" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "sbom-$VERSION.json" || true
+            # Always pull and scan the full GHCR image for parity with image-promotion
+            IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
+            if ! docker pull "$IMAGE" > /dev/null 2>&1; then
+              echo "  ⚠️  Could not pull $IMAGE — skipping"
+              echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
+              continue
             fi
+
+            # Run Trivy against the pulled image (JSON for our alerts) - same method as image-promotion
+            trivy image \
+              --format json \
+              --output "rescan-$VERSION.json" \
+              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+              "$IMAGE" || true
+
+            # Run Trivy against the pulled image (SARIF for GitHub Security)
+            trivy image \
+              --format sarif \
+              --output "sarifs/rescan-$VERSION.sarif" \
+              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+              "$IMAGE" || true
 
             # Count findings by severity for the summary table
             CRIT_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
@@ -133,25 +115,23 @@ jobs:
               fi
             done
 
-            # Generate per-version detail section in the summary
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "---" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            python3 .github/scripts/generate_summary.py "rescan-$VERSION.json" kev.json "$VERSION" || true
-
-            # Row in the summary table
+            # Row in the overview table
             if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
               STATUS="🔴 Alert"
             else
               STATUS="✅ Clean"
             fi
-            # Go back and fill in the table row (note: we append to the summary, so we re-emit the row)
-            # The table was opened before the loop so we write each row right after its detail section
-            # Actually write the row now -- GitHub renders the whole markdown so order doesn't matter
             KEV_EMOJI="No"
             if [ "$KEV_HIT" = true ]; then KEV_EMOJI="✅ Yes"; fi
+            echo "| $VERSION | $CRIT_COUNT | $HIGH_COUNT | $MED_COUNT | $LOW_COUNT | $KEV_EMOJI | $STATUS |" >> $GITHUB_STEP_SUMMARY
 
-            # Escalate if either condition triggers
+            # Per-version detailed vulnerability section
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            python3 .github/scripts/generate_summary.py "rescan-$VERSION.json" kev.json "$VERSION" || true
+
+            # Escalate if alert condition triggers
             if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
               ALERT_FOUND=true
               ALERT_BODY="$ALERT_BODY\n\n### \`n8n-trusted:$VERSION\`\n"
@@ -172,7 +152,6 @@ jobs:
           echo "scanned_versions=$SCANNED_VERSIONS_JSON" >> $GITHUB_OUTPUT
 
           echo "alert_found=$ALERT_FOUND" >> $GITHUB_OUTPUT
-          # Escape multiline for GITHUB_OUTPUT
           echo "alert_body<<EOF" >> $GITHUB_OUTPUT
           echo -e "$ALERT_BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -229,35 +208,14 @@ jobs:
       matrix:
         version: ${{ fromJson(needs.rescan.outputs.scanned_versions) }}
     steps:
-      - name: Checkout repository (needed to resolve branch SHA)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Download SARIF artifact
         uses: actions/download-artifact@v4
         with:
           name: sarif-files
           path: sarifs/
 
-      - name: Resolve version branch SHA
-        id: branch-info
-        run: |
-          BRANCH="n8n-${{ matrix.version }}"
-          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
-            SHA=$(git ls-remote origin "refs/heads/$BRANCH" | awk '{print $1}')
-            echo "sha=$SHA" >> $GITHUB_OUTPUT
-            echo "ref=refs/heads/$BRANCH" >> $GITHUB_OUTPUT
-          else
-            echo "Branch $BRANCH not found — using default ref"
-            echo "sha=${{ github.sha }}" >> $GITHUB_OUTPUT
-            echo "ref=refs/heads/main" >> $GITHUB_OUTPUT
-          fi
-
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "sarifs/rescan-${{ matrix.version }}.sarif"
           category: "rescan-${{ matrix.version }}"
-          ref: ${{ steps.branch-info.outputs.ref }}
-          sha: ${{ steps.branch-info.outputs.sha }}
