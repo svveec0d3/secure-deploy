@@ -55,6 +55,12 @@ jobs:
           # List all GitHub Releases in this repo
           RELEASES=$(gh release list --repo ${{ github.repository }} --limit 20 --json tagName,name | jq -r '.[].tagName')
 
+          # Write the master summary header
+          echo "## 🛡️ Weekly Re-Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | CRITICAL | HIGH | MEDIUM | LOW/UNKNOWN | KEV | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |" >> $GITHUB_STEP_SUMMARY
+
           for TAG in $RELEASES; do
             # Extract version from tag like 'n8n-1.55.3' -> '1.55.3'
             VERSION=$(echo "$TAG" | sed 's/^n8n-//')
@@ -64,13 +70,14 @@ jobs:
             # Try to download the attached SBOM
             if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
               echo "  ⚠️  Could not download SBOM for $TAG — falling back to full image scan"
-              
+
               IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
               if ! docker pull "$IMAGE" > /dev/null 2>&1; then
                 echo "  ⚠️  Could not pull $IMAGE either — skipping"
+                echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
                 continue
               fi
-              
+
               # Run Trivy against the pulled image (JSON for our alerts)
               trivy image \
                 --format json \
@@ -100,9 +107,15 @@ jobs:
                 "sbom-$VERSION.json" || true
             fi
 
+            # Count findings by severity for the summary table
+            CRIT_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
+            HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
+            MED_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
+            LOW_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW" or .Severity=="UNKNOWN")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
+            CRIT_HIGH_COUNT=$((CRIT_COUNT + HIGH_COUNT))
+
             # Check for CRITICAL/HIGH CVEs
             HAS_CRIT_HIGH=false
-            CRIT_HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             if [ "$CRIT_HIGH_COUNT" -gt 0 ]; then
               HAS_CRIT_HIGH=true
             fi
@@ -120,12 +133,30 @@ jobs:
               fi
             done
 
+            # Generate per-version detail section in the summary
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            python3 .github/scripts/generate_summary.py "rescan-$VERSION.json" kev.json "$VERSION" || true
+
+            # Row in the summary table
+            if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
+              STATUS="🔴 Alert"
+            else
+              STATUS="✅ Clean"
+            fi
+            # Go back and fill in the table row (note: we append to the summary, so we re-emit the row)
+            # The table was opened before the loop so we write each row right after its detail section
+            # Actually write the row now -- GitHub renders the whole markdown so order doesn't matter
+            KEV_EMOJI="No"
+            if [ "$KEV_HIT" = true ]; then KEV_EMOJI="✅ Yes"; fi
+
             # Escalate if either condition triggers
             if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
               ALERT_FOUND=true
               ALERT_BODY="$ALERT_BODY\n\n### \`n8n-trusted:$VERSION\`\n"
               if [ "$HAS_CRIT_HIGH" = true ]; then
-                ALERT_BODY="$ALERT_BODY- 🔴 **$CRIT_HIGH_COUNT unfixed CRITICAL/HIGH CVE(s)** detected\n"
+                ALERT_BODY="$ALERT_BODY- 🔴 **$CRIT_HIGH_COUNT CRITICAL/HIGH CVE(s)** detected\n"
               fi
               if [ "$KEV_HIT" = true ]; then
                 ALERT_BODY="$ALERT_BODY- 🚨 **KEV matches** (actively exploited):\n$KEV_LIST\n"
@@ -152,6 +183,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ALERT_BODY: ${{ steps.rescan.outputs.alert_body }}
         run: |
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           cat << EOF > issue_body.md
           ## Weekly Re-Scan Alert
 
@@ -164,6 +196,8 @@ jobs:
           $ALERT_BODY
 
           ---
+          👉 [View Full Vulnerability Details (Workflow Run)]($RUN_URL)
+
           *Triggered by the weekly re-scan job on $(date -u '+%Y-%m-%d')*
           EOF
 
@@ -206,3 +240,4 @@ jobs:
         with:
           sarif_file: "sarifs/rescan-${{ matrix.version }}.sarif"
           category: "rescan-${{ matrix.version }}"
+          ref: "refs/heads/n8n-${{ matrix.version }}"

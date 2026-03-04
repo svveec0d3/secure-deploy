@@ -22,8 +22,10 @@ jobs:
       image_digest: ${{ steps.fetch-digest.outputs.digest }}
       resolved_version: ${{ steps.fetch-digest.outputs.version }}
       skip_promotion: ${{ steps.fetch-digest.outputs.skip_promotion }}
+      version_branch: ${{ steps.fetch-digest.outputs.version_branch }}
     permissions:
-      contents: read
+      contents: write
+      issues: write
       security-events: write
     steps:
       - name: Checkout repository
@@ -127,9 +129,25 @@ jobs:
           echo "Pinned version: $VERSION @ $DIGEST"
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
           # Pull by immutable digest — guarantees what we scan is what we promote
           docker pull n8nio/n8n@$DIGEST
           docker tag n8nio/n8n@$DIGEST n8nio/n8n:$VERSION
+
+          # Create per-version branch (used to anchor SARIF dedup in Security Hub)
+          BRANCH="n8n-$VERSION"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
+            echo "Branch $BRANCH already exists — checking it out"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+          else
+            echo "Creating branch $BRANCH"
+            git checkout -b "$BRANCH"
+            git push origin "$BRANCH"
+          fi
+          echo "version_branch=$BRANCH" >> $GITHUB_OUTPUT
 
       - name: Scan for CVEs (non-blocking report)
         run: |
@@ -169,6 +187,7 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
           category: "image-promotion-${{ env.N8N_VERSION }}"
+          ref: refs/heads/n8n-${{ env.N8N_VERSION }}
 
       - name: Check CISA KEV (Known Exploited Vulnerabilities)
         id: kev-check
@@ -243,6 +262,38 @@ jobs:
             echo "is_vulnerable=false" >> $GITHUB_OUTPUT
           fi
           exit 0
+
+      - name: Open GitHub Issue if vulnerable findings detected
+        if: steps.trivy-scan.outputs.is_vulnerable == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CRIT_HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-report.json 2>/dev/null || echo 0)
+          KEV_HIT="${{ steps.kev-check.outputs.kev_hit }}"
+          VERSION="${{ env.N8N_VERSION }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh label create security --color "FF0000" --force || true
+          cat << 'ISSUE_EOF' > issue_body.md
+          ## 🚨 Promotion Alert: Vulnerable Image Requires Review
+          ISSUE_EOF
+          cat >> issue_body.md << ISSUE_EOF
+
+          **Image:** n8n ${VERSION}
+          - **CRITICAL/HIGH CVEs:** ${CRIT_HIGH}
+          - **CISA KEV Match:** ${KEV_HIT}
+
+          👉 [View Full Vulnerability Report (Workflow Run)](${RUN_URL})
+
+          **Action required:** Click the link above to review the scan details and approve/deny promotion in the **trusted-promotion** environment gate.
+
+          ---
+          *Triggered by Image Promotion on $(date -u '+%Y-%m-%d')*
+          ISSUE_EOF
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "🚨 n8n $VERSION: CRITICAL/HIGH CVEs or KEV detected — approval required" \
+            --body-file issue_body.md \
+            --label "security"
 
   promote-images-auto:
     name: Auto Promotion (Clean Image)
