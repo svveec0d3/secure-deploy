@@ -1,6 +1,8 @@
 name: Image Promotion (Trusted Source)
 
 on:
+  schedule:
+    - cron: '0 2 * * 1' # Run every Monday at 02:00 UTC
   workflow_dispatch:
     inputs:
       n8n_version:
@@ -19,6 +21,7 @@ jobs:
       is_vulnerable: ${{ steps.trivy-scan.outputs.is_vulnerable }}
       image_digest: ${{ steps.fetch-digest.outputs.digest }}
       resolved_version: ${{ steps.fetch-digest.outputs.version }}
+      skip_promotion: ${{ steps.fetch-digest.outputs.skip_promotion }}
     permissions:
       contents: read
       security-events: write
@@ -99,6 +102,17 @@ jobs:
           else
             VERSION="$REQUESTED"
           fi
+
+          # Check if this version has already been promoted to our GHCR (Idempotency Check)
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" "https://ghcr.io/v2/${{ github.repository }}/n8n-trusted/manifests/$VERSION")
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Version $VERSION is already promoted in ghcr.io/${{ github.repository }}/n8n-trusted."
+            echo "No action required. Exiting gracefully."
+            echo "skip_promotion=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "skip_promotion=false" >> $GITHUB_OUTPUT
 
           # Resolve the exact SHA256 digest for this version tag from Docker Hub
           TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:n8nio/n8n:pull" | jq -r '.token')
@@ -233,7 +247,7 @@ jobs:
   promote-images-auto:
     name: Auto Promotion (Clean Image)
     needs: scan-images
-    if: needs.scan-images.outputs.is_vulnerable == 'false'
+    if: needs.scan-images.outputs.is_vulnerable == 'false' && needs.scan-images.outputs.skip_promotion != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -326,7 +340,7 @@ jobs:
   promote-images-manual:
     name: Manual Approval Promotion (Vulnerable Image)
     needs: scan-images
-    if: needs.scan-images.outputs.is_vulnerable == 'true'
+    if: needs.scan-images.outputs.is_vulnerable == 'true' && needs.scan-images.outputs.skip_promotion != 'true'
     runs-on: ubuntu-latest
     environment: trusted-promotion
     permissions:
