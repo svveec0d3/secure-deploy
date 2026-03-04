@@ -16,6 +16,8 @@ jobs:
       packages: read
       issues: write         # Needed to open alert issues
       security-events: write
+    outputs:
+      scanned_versions: ${{ steps.rescan.outputs.scanned_versions }}
 
     steps:
       - name: Checkout repository
@@ -134,6 +136,10 @@ jobs:
             fi
           done
 
+          # Track scanned versions for the upload matrix
+          SCANNED_VERSIONS_JSON=$(echo "$RELEASES" | sed 's/^n8n-//' | jq -R . | jq -s -c .)
+          echo "scanned_versions=$SCANNED_VERSIONS_JSON" >> $GITHUB_OUTPUT
+
           echo "alert_found=$ALERT_FOUND" >> $GITHUB_OUTPUT
           # Escape multiline for GITHUB_OUTPUT
           echo "alert_body<<EOF" >> $GITHUB_OUTPUT
@@ -170,9 +176,33 @@ jobs:
             --body-file issue_body.md \
             --label "security"
 
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
+      - name: Upload SARIFs as internal artifact
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          sarif_file: 'sarifs/'
-          category: "rescan"
+          name: sarif-files
+          path: sarifs/
+
+  upload-sarifs:
+    name: Upload SARIFs to Code Scanning
+    needs: rescan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.rescan.outputs.scanned_versions) }}
+    steps:
+      - name: Download SARIF artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sarif-files
+          path: sarifs/
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: "sarifs/rescan-${{ matrix.version }}.sarif"
+          category: "rescan-${{ matrix.version }}"
