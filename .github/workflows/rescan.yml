@@ -175,3 +175,4 @@ jobs:
         if: always()
         with:
           sarif_file: 'sarifs/'
+          category: "rescan"

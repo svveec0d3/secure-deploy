@@ -154,6 +154,7 @@ jobs:
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
+          category: "image-promotion-${{ env.N8N_VERSION }}"
 
       - name: Check CISA KEV (Known Exploited Vulnerabilities)
         id: kev-check
