@@ -51,9 +51,19 @@ jobs:
           ALERT_BODY=""
           ALERT_FOUND=false
           mkdir -p sarifs
+          SCANNED_TAGS=""
 
           # List all GitHub Releases in this repo
-          RELEASES=$(gh release list --repo ${{ github.repository }} --limit 20 --json tagName,name | jq -r '.[].tagName')
+          RELEASES=$(gh release list --repo ${{ github.repository }} --limit 20 --json tagName | jq -r '.[].tagName' | grep '^n8n-' || true)
+
+          if [ -z "$RELEASES" ]; then
+            echo "No releases found."
+            echo "scanned_versions=[]" >> $GITHUB_OUTPUT
+            echo "alert_found=false" >> $GITHUB_OUTPUT
+            echo "alert_body<<EOF" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Write the master summary header
           echo "## 🛡️ Weekly Re-Scan Report" >> $GITHUB_STEP_SUMMARY
@@ -64,59 +74,42 @@ jobs:
           for TAG in $RELEASES; do
             # Extract version from tag like 'n8n-1.55.3' -> '1.55.3'
             VERSION=$(echo "$TAG" | sed 's/^n8n-//')
+            [ -z "$VERSION" ] && continue
 
             echo "--- Re-scanning n8n-trusted:$VERSION ---"
 
-            # Try to download the Trivy-generated SBOM (attached to GitHub Release)
-            if ! gh release download "$TAG" -p "sbom.spdx.json" -O "sbom-$VERSION.json" --repo ${{ github.repository }} > /dev/null 2>&1; then
-              echo "  ⚠️  No SBOM for $TAG — falling back to full image scan"
-
-              IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
-              if ! docker pull "$IMAGE" > /dev/null 2>&1; then
-                echo "  ⚠️  Could not pull $IMAGE either — skipping"
-                echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
-                continue
-              fi
-
-              # Full image scan as fallback (same flags as image-promotion)
-              trivy image \
-                --format json \
-                --output "rescan-$VERSION.json" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "$IMAGE" || true
-
-              trivy image \
-                --format sarif \
-                --output "sarifs/rescan-$VERSION.sarif" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "$IMAGE" || true
-            else
-              # Scan the Trivy-generated SBOM — identical results to trivy image
-              trivy sbom \
-                --format json \
-                --output "rescan-$VERSION.json" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "sbom-$VERSION.json" || true
-
-              trivy sbom \
-                --format sarif \
-                --output "sarifs/rescan-$VERSION.sarif" \
-                --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
-                "sbom-$VERSION.json" || true
+            IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:$VERSION"
+            if ! docker pull "$IMAGE" > /dev/null 2>&1; then
+              echo "  ⚠️  Could not pull $IMAGE — skipping"
+              echo "| $VERSION | — | — | — | — | — | ⚠️ Skipped |" >> $GITHUB_STEP_SUMMARY
+              continue
             fi
 
-            # Count findings by severity for the summary table
+            # Full image scan — same method as image-promotion for consistent results
+            trivy image \
+              --format json \
+              --output "rescan-$VERSION.json" \
+              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+              "$IMAGE" || true
+
+            trivy image \
+              --format sarif \
+              --output "sarifs/rescan-$VERSION.sarif" \
+              --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+              "$IMAGE" || true
+
+            # Record this version was successfully scanned
+            SCANNED_TAGS="$SCANNED_TAGS $VERSION"
+
+            # Count findings by severity
             CRIT_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             MED_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             LOW_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW" or .Severity=="UNKNOWN")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             CRIT_HIGH_COUNT=$((CRIT_COUNT + HIGH_COUNT))
 
-            # Check for CRITICAL/HIGH CVEs
             HAS_CRIT_HIGH=false
-            if [ "$CRIT_HIGH_COUNT" -gt 0 ]; then
-              HAS_CRIT_HIGH=true
-            fi
+            [ "$CRIT_HIGH_COUNT" -gt 0 ] && HAS_CRIT_HIGH=true
 
             # Check for KEV matches
             KEV_IDS=$(jq -r '.vulnerabilities[].cveID' kev.json)
@@ -131,14 +124,14 @@ jobs:
               fi
             done
 
-            # Row in the overview table
+            # Overview table row
             if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
               STATUS="🔴 Alert"
             else
               STATUS="✅ Clean"
             fi
             KEV_EMOJI="No"
-            if [ "$KEV_HIT" = true ]; then KEV_EMOJI="✅ Yes"; fi
+            [ "$KEV_HIT" = true ] && KEV_EMOJI="✅ Yes"
             echo "| $VERSION | $CRIT_COUNT | $HIGH_COUNT | $MED_COUNT | $LOW_COUNT | $KEV_EMOJI | $STATUS |" >> $GITHUB_STEP_SUMMARY
 
             # Per-version detailed vulnerability section
@@ -151,20 +144,16 @@ jobs:
             if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
               ALERT_FOUND=true
               ALERT_BODY="$ALERT_BODY\n\n### \`n8n-trusted:$VERSION\`\n"
-              if [ "$HAS_CRIT_HIGH" = true ]; then
-                ALERT_BODY="$ALERT_BODY- 🔴 **$CRIT_HIGH_COUNT CRITICAL/HIGH CVE(s)** detected\n"
-              fi
-              if [ "$KEV_HIT" = true ]; then
-                ALERT_BODY="$ALERT_BODY- 🚨 **KEV matches** (actively exploited):\n$KEV_LIST\n"
-              fi
+              [ "$HAS_CRIT_HIGH" = true ] && ALERT_BODY="$ALERT_BODY- 🔴 **$CRIT_HIGH_COUNT CRITICAL/HIGH CVE(s)** detected\n"
+              [ "$KEV_HIT" = true ] && ALERT_BODY="$ALERT_BODY- 🚨 **KEV matches** (actively exploited):\n$KEV_LIST\n"
               echo "  ⚠️  Alert triggered for $VERSION"
             else
               echo "  ✅ $VERSION is still clean"
             fi
           done
 
-          # Track scanned versions for the upload matrix
-          SCANNED_VERSIONS_JSON=$(echo "$RELEASES" | sed 's/^n8n-//' | jq -R . | jq -s -c .)
+          # Build JSON array of successfully scanned versions
+          SCANNED_VERSIONS_JSON=$(echo "$SCANNED_TAGS" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s -c .)
           echo "scanned_versions=$SCANNED_VERSIONS_JSON" >> $GITHUB_OUTPUT
 
           echo "alert_found=$ALERT_FOUND" >> $GITHUB_OUTPUT
@@ -196,7 +185,6 @@ jobs:
           *Triggered by the weekly re-scan job on $(date -u '+%Y-%m-%d')*
           EOF
 
-          # Create the 'security' label if it doesn't already exist
           gh label create security --color "FF0000" --force || true
 
           gh issue create \
@@ -211,11 +199,12 @@ jobs:
         with:
           name: sarif-files
           path: sarifs/
+          if-no-files-found: warn
 
   upload-sarifs:
     name: Upload SARIFs to Code Scanning
     needs: rescan
-    if: always()
+    if: always() && needs.rescan.outputs.scanned_versions != '[]' && needs.rescan.outputs.scanned_versions != ''
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -231,6 +220,7 @@ jobs:
           path: sarifs/
 
       - name: Upload Trivy scan results to GitHub Security tab
+        if: hashFiles(format('sarifs/rescan-{0}.sarif', matrix.version)) != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "sarifs/rescan-${{ matrix.version }}.sarif"
