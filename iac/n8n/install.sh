@@ -198,3 +198,30 @@ else
     echo "⚠️  The container may not have started correctly."
     echo "Run 'docker compose logs' to diagnose."
 fi
+
+# ─── AUTO-UPGRADE ────────────────────────────────────────────────────────────
+echo ""
+echo "============================================="
+echo "       🔄 Auto-Upgrade Configuration         "
+echo "============================================="
+read -p "Enable daily auto-upgrade? Checks for new versions every day and upgrades automatically. (y/N): " ENABLE_AUTOUPGRADE
+ENABLE_AUTOUPGRADE=${ENABLE_AUTOUPGRADE:-N}
+
+if [[ "$ENABLE_AUTOUPGRADE" =~ ^[Yy]$ ]]; then
+    UPGRADE_SCRIPT="$(pwd)/upgrade.sh"
+    CRON_LOG="$(pwd)/upgrade.log"
+
+    # Make the upgrade script executable
+    chmod +x "$UPGRADE_SCRIPT"
+
+    # Remove any existing cron entry for upgrade.sh, then register a fresh one
+    CRON_ENTRY="0 3 * * * $UPGRADE_SCRIPT >> $CRON_LOG 2>&1"
+    ( crontab -l 2>/dev/null | grep -v "$UPGRADE_SCRIPT" ; echo "$CRON_ENTRY" ) | crontab -
+
+    echo "✅ Daily auto-upgrade enabled. Runs at 03:00 every night."
+    echo "   Upgrade log: $CRON_LOG"
+    echo "   To disable: crontab -e  and remove the upgrade.sh line."
+else
+    echo "   Auto-upgrade not enabled. You can run ./upgrade.sh manually to upgrade."
+fi
+
