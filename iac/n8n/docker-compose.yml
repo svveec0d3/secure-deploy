@@ -88,8 +88,8 @@ services:
       - N8N_USER_MANAGEMENT_DISABLED=false
       - WEBHOOK_URL=http://${HOST_IP}:5678/
       - N8N_SECURE_COOKIE=false
-      # Disable internal task runners (e.g., Python 3) which are not installed in the hardened image
-      - N8N_DEFAULT_SUPPORTED_RUNNERS=
+      # Disable Python task runner — Python 3 is not installed in the hardened image
+      - N8N_PYTHON_ENABLED=false
 
     # ── Health Check ──────────────────────────────────────────────────────────
     healthcheck:
