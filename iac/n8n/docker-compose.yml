@@ -12,8 +12,9 @@ services:
     # Controls are labelled with their CIS ID for traceability.
 
     # CIS 5.14 — Use on-failure restart policy with a max count
-    # Rationale: 'always' can mask crash loops; on-failure:5 caps restart attempts
-    restart: "on-failure:5"
+    # 'unless-stopped' ensures auto-restart on host reboot while still
+    # respecting intentional `docker compose stop` commands
+    restart: "unless-stopped"
 
     # CIS 5.21 — Do not disable the default seccomp profile
     # CIS 5.1  — Do not disable AppArmor (apply docker-default profile)
