@@ -105,7 +105,7 @@ services:
   # ── Init Container ─────────────────────────────────────────────────────────
   # Ensures the volumes are owned by the node user gracefully
   n8n-init:
-    image: alpine:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC:-svveec0d3}/${REPOSITORY_NAME:-secure-deploy}/n8n-trusted${N8N_IMAGE_IDENTIFIER}
     user: root
     command: /bin/sh -c "chown -R 1000:1000 /home/node/.n8n /home/node/.cache"
     volumes:
