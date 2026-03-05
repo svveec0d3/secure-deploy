@@ -333,7 +333,7 @@ jobs:
           # Pull the exact pinned digest resolved during the scan step
           DIGEST="${{ needs.scan-images.outputs.image_digest }}"
           docker pull n8nio/n8n@$DIGEST
-          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
+          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ needs.scan-images.outputs.resolved_version }}"
           docker tag n8nio/n8n@$DIGEST $TRUSTED_IMAGE
           PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
           GHCR_DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
@@ -355,7 +355,7 @@ jobs:
           trivy image \
             --format spdx-json \
             --output sbom.spdx.json \
-            n8nio/n8n:${{ env.N8N_VERSION }}
+            n8nio/n8n:${{ needs.scan-images.outputs.resolved_version }}
           echo "SBOM generated: $(jq '.packages | length' sbom.spdx.json) packages"
 
       - name: Attest SBOM
@@ -439,7 +439,7 @@ jobs:
         run: |
           DIGEST="${{ needs.scan-images.outputs.image_digest }}"
           docker pull n8nio/n8n@$DIGEST
-          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ env.N8N_VERSION }}"
+          TRUSTED_IMAGE="ghcr.io/${{ github.repository }}/n8n-trusted:${{ needs.scan-images.outputs.resolved_version }}"
           docker tag n8nio/n8n@$DIGEST $TRUSTED_IMAGE
           PUSH_OUTPUT=$(docker push $TRUSTED_IMAGE)
           GHCR_DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'sha256:[a-f0-9]+')
@@ -459,7 +459,7 @@ jobs:
           trivy image \
             --format spdx-json \
             --output sbom.spdx.json \
-            n8nio/n8n:${{ env.N8N_VERSION }}
+            n8nio/n8n:${{ needs.scan-images.outputs.resolved_version }}
           echo "SBOM generated: $(jq '.packages | length' sbom.spdx.json) packages"
 
       - name: Attest SBOM
