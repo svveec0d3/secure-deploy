@@ -73,7 +73,6 @@ services:
     # Required because read_only: true prohibits any FS writes on the root layer
     tmpfs:
       - /tmp:mode=1777,size=128m,noexec,nosuid
-      - /home/node/.cache:uid=1000,gid=1000,mode=0700,size=64m,noexec,nosuid
 
     # CIS 5.18 — Set ulimits where necessary
     ulimits:
@@ -99,6 +98,17 @@ services:
     # Named volume only — no host path mounts (CIS 5.4 / 5.31)
     volumes:
       - n8n_storage:/home/node/.n8n
+      - n8n_cache:/home/node/.cache
+
+  # ── Init Container ─────────────────────────────────────────────────────────
+  # Ensures the volumes are owned by the node user gracefully
+  n8n-init:
+    image: alpine:latest
+    user: root
+    command: /bin/sh -c "chown -R 1000:1000 /home/node/.n8n /home/node/.cache"
+    volumes:
+      - n8n_storage:/home/node/.n8n
+      - n8n_cache:/home/node/.cache
 
     # ── Logging ───────────────────────────────────────────────────────────────
     # Prevent unbounded log growth on the host
@@ -116,4 +126,6 @@ networks:
 
 volumes:
   n8n_storage:
+    driver: local
+  n8n_cache:
     driver: local
