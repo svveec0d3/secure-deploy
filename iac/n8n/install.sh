@@ -157,8 +157,11 @@ $SED_CMD "s/^CPU_LIMIT=.*/CPU_LIMIT=$CPU_LIMIT/" .env
 $SED_CMD "s/^PIDS_LIMIT=.*/PIDS_LIMIT=$PIDS_LIMIT/" .env
 
 if [ -n "$GHCR_DIGEST" ]; then
-    $SED_CMD "s|^N8N_IMAGE_DIGEST=.*|N8N_IMAGE_DIGEST=$GHCR_DIGEST|" .env
+    $SED_CMD "s|^N8N_IMAGE_IDENTIFIER=.*|N8N_IMAGE_IDENTIFIER=@$GHCR_DIGEST|" .env
     echo "✅ Digest written to .env — Docker will run the exact attested image."
+else
+    $SED_CMD "s|^N8N_IMAGE_IDENTIFIER=.*|N8N_IMAGE_IDENTIFIER=:$N8N_VERSION|" .env
+    echo "⚠️  Fallback tag written to .env — digest pinning disabled."
 fi
 
 # ─── DEPLOY ─────────────────────────────────────────────────────────────────

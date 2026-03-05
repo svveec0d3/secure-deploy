@@ -2,9 +2,9 @@ services:
   n8n:
     # ── Image ─────────────────────────────────────────────────────────────────
     # Runtime always uses the immutable digest — never a mutable tag.
-    # N8N_IMAGE_DIGEST is auto-populated by install.sh from the GitHub Release.
+    # N8N_IMAGE_IDENTIFIER is auto-populated by install.sh (format: @sha256:... or :1.55.3)
     # Policy: promotion-policy.yml § image_pinning
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC}/${REPOSITORY_NAME}/n8n-trusted@${N8N_IMAGE_DIGEST}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC:-svveec0d3}/${REPOSITORY_NAME:-secure-deploy}/n8n-trusted${N8N_IMAGE_IDENTIFIER}
 
     # ── CIS Docker Benchmark v1.6.0 — Container Runtime Controls ─────────────
     # Reference: https://www.cisecurity.org/benchmark/docker
