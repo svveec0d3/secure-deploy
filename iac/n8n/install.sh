@@ -90,7 +90,12 @@ if [ -z "$GHCR_DIGEST" ]; then
     echo "⚠️  Could not fetch digest from GitHub Release."
     read -p "   Enter the GHCR digest manually (sha256:...), or press Enter to use version tag: " MANUAL_DIGEST
     if [ -n "$MANUAL_DIGEST" ]; then
-        GHCR_DIGEST="$MANUAL_DIGEST"
+        # Prepend sha256: if the user provided only the hex hash
+        if [[ "$MANUAL_DIGEST" =~ ^[a-fA-F0-9]{64}$ ]]; then
+            GHCR_DIGEST="sha256:$MANUAL_DIGEST"
+        else
+            GHCR_DIGEST="$MANUAL_DIGEST"
+        fi
     else
         echo "   ⚠️  Falling back to version tag (less secure — digest not pinned)."
     fi
@@ -138,6 +143,8 @@ else
 fi
 
 # ─── WRITE .ENV ─────────────────────────────────────────────────────────────
+PREV_IDENTIFIER=""
+
 if [ ! -f .env ]; then
     echo ""
     echo "📝 Creating .env file from template..."
@@ -145,6 +152,7 @@ if [ ! -f .env ]; then
 else
     echo ""
     echo "📝 Updating existing .env file..."
+    PREV_IDENTIFIER=$(grep '^N8N_IMAGE_IDENTIFIER=' .env | cut -d '=' -f 2- || true)
 fi
 
 SED_CMD="sed -i"
@@ -183,7 +191,9 @@ if docker ps | grep -q "n8n-trusted"; then
     echo "http://$FINAL_IP:5678"
     echo "============================================="
     echo "To view logs: docker compose logs -f"
-    echo "To rollback:  edit N8N_IMAGE_DIGEST in .env and run: docker compose up -d"
+    if [ -n "$PREV_IDENTIFIER" ]; then
+        echo "To rollback:  $SED_CMD 's|^N8N_IMAGE_IDENTIFIER=.*|N8N_IMAGE_IDENTIFIER=$PREV_IDENTIFIER|' .env && docker compose up -d"
+    fi
 else
     echo "⚠️  The container may not have started correctly."
     echo "Run 'docker compose logs' to diagnose."

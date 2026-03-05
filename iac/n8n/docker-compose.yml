@@ -73,7 +73,7 @@ services:
     # Required because read_only: true prohibits any FS writes on the root layer
     tmpfs:
       - /tmp:mode=1777,size=128m,noexec,nosuid
-      - /home/node/.cache:mode=0700,size=64m,noexec,nosuid
+      - /home/node/.cache:uid=1000,gid=1000,mode=0700,size=64m,noexec,nosuid
 
     # CIS 5.18 — Set ulimits where necessary
     ulimits:
