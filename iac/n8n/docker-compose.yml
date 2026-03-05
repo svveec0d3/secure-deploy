@@ -71,8 +71,9 @@ services:
 
     # ── Ephemeral writable paths (not backed by persistent storage) ────────────
     # Required because read_only: true prohibits any FS writes on the root layer
+    # /tmp is used for both general temp files and n8n's cache (via XDG_CACHE_HOME)
     tmpfs:
-      - /tmp:mode=1777,size=128m,noexec,nosuid
+      - /tmp:mode=1777,size=256m,nosuid
 
     # CIS 5.18 — Set ulimits where necessary
     ulimits:
@@ -85,6 +86,9 @@ services:
       - N8N_USER_MANAGEMENT_DISABLED=false
       - WEBHOOK_URL=http://${HOST_IP}:5678/
       - N8N_SECURE_COOKIE=false
+      # Redirect Node.js / n8n cache into /tmp (writable tmpfs) — avoids EACCES
+      # on read-only root FS since /home/node/.cache is not writable by default
+      - XDG_CACHE_HOME=/tmp/cache
       # Disable internal task runners (e.g., Python 3) which are not installed in the hardened image
       - N8N_DEFAULT_SUPPORTED_RUNNERS=
 
@@ -100,17 +104,6 @@ services:
     # Named volume only — no host path mounts (CIS 5.4 / 5.31)
     volumes:
       - n8n_storage:/home/node/.n8n
-      - n8n_cache:/home/node/.cache
-
-  # ── Init Container ─────────────────────────────────────────────────────────
-  # Ensures the volumes are owned by the node user gracefully
-  n8n-init:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER_LC:-svveec0d3}/${REPOSITORY_NAME:-secure-deploy}/n8n-trusted${N8N_IMAGE_IDENTIFIER}
-    user: root
-    command: /bin/sh -c "chown -R 1000:1000 /home/node/.n8n /home/node/.cache"
-    volumes:
-      - n8n_storage:/home/node/.n8n
-      - n8n_cache:/home/node/.cache
 
     # ── Logging ───────────────────────────────────────────────────────────────
     # Prevent unbounded log growth on the host
@@ -128,6 +121,4 @@ networks:
 
 volumes:
   n8n_storage:
-    driver: local
-  n8n_cache:
     driver: local
