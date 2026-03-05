@@ -199,7 +199,7 @@ jobs:
         with:
           name: sarif-files
           path: sarifs/
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
   upload-sarifs:
     name: Upload SARIFs to Code Scanning
