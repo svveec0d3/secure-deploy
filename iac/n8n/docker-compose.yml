@@ -71,9 +71,11 @@ services:
 
     # ── Ephemeral writable paths (not backed by persistent storage) ────────────
     # Required because read_only: true prohibits any FS writes on the root layer
-    # /tmp is used for both general temp files and n8n's cache (via XDG_CACHE_HOME)
+    # /home/node/.cache needs mode=1777 (world-writable) so uid 1000 can write;
+    # mode=0700 (used previously) is root-only and caused EACCES.
     tmpfs:
       - /tmp:mode=1777,size=256m,nosuid
+      - /home/node/.cache:mode=1777,size=64m,nosuid
 
     # CIS 5.18 — Set ulimits where necessary
     ulimits:
@@ -86,9 +88,6 @@ services:
       - N8N_USER_MANAGEMENT_DISABLED=false
       - WEBHOOK_URL=http://${HOST_IP}:5678/
       - N8N_SECURE_COOKIE=false
-      # Redirect Node.js / n8n cache into /tmp (writable tmpfs) — avoids EACCES
-      # on read-only root FS since /home/node/.cache is not writable by default
-      - XDG_CACHE_HOME=/tmp/cache
       # Disable internal task runners (e.g., Python 3) which are not installed in the hardened image
       - N8N_DEFAULT_SUPPORTED_RUNNERS=
 
