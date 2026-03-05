@@ -59,12 +59,36 @@ def main():
     lines = []
     lines.append(f"## \U0001f6e1\ufe0f Security Scan Summary: n8nio/n8n:{version}")
     lines.append("")
-    lines.append("### \U0001f4ca Vulnerability Details")
-    lines.append("")
 
     if not vulns:
         lines.append("\u2705 No vulnerabilities found.")
+        lines.append("")
     else:
+        # Calculate counts for the high-level summary table
+        crit_count = sum(1 for v in vulns if v.get("Severity") == "CRITICAL")
+        high_count = sum(1 for v in vulns if v.get("Severity") == "HIGH")
+        med_count = sum(1 for v in vulns if v.get("Severity") == "MEDIUM")
+        low_count = sum(1 for v in vulns if v.get("Severity") in ["LOW", "UNKNOWN"])
+        kev_count = sum(1 for v in vulns if v.get("VulnerabilityID", "") in kev_ids)
+
+        has_crit_high = crit_count + high_count > 0
+        has_kev = kev_count > 0
+
+        status = "🔴 Alert" if (has_crit_high or has_kev) else "✅ Clean"
+        kev_emoji = "✅ Yes" if has_kev else "No"
+
+        # High-level summary table
+        lines.append("| Version | CRITICAL | HIGH | MEDIUM | LOW/UNKNOWN | KEV | Status |")
+        lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: |")
+        lines.append(f"| {version} | {crit_count} | {high_count} | {med_count} | {low_count} | {kev_emoji} | {status} |")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    lines.append("### \U0001f4ca Vulnerability Details")
+    lines.append("")
+
+    if vulns:
         lines.append("| CVE | Severity | Published | Package | Version | Fixed In | KEV |")
         lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for v in vulns:
