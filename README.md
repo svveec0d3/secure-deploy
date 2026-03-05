@@ -84,7 +84,8 @@ flowchart TD
 └── iac/n8n/
     ├── docker-compose.yml   # CIS‑hardened stack (read‑only FS, non‑root, AppArmor, limits)
     ├── .env.template        # Template – copy to .env and populate
-    └── install.sh           # Interactive setup: version selection, digest fetch, provenance verify, deploy
+    ├── install.sh           # Interactive setup: version, resource limits, provenance verify, deploy, auto‑upgrade
+    └── upgrade.sh           # Auto‑upgrade: checks latest release, upgrades, health‑checks, rolls back on failure
 ```
 
 ---
@@ -105,23 +106,23 @@ flowchart TD
 4. Update `policy/vulnerability‑gate‑policy.yml` comments to reflect the new waiver.
 
 ### 🔄 Rollback Procedure
+
+`install.sh` automatically prints a ready‑to‑run rollback command at the end of each deployment:
 ```bash
-# Edit .env with values from the target release
-nano iac/n8n/.env
-# Example values
-N8N_IMAGE_VERSION=1.54.0
-N8N_IMAGE_DIGEST=sha256:abcd1234...
-# Apply
-docker compose up -d
+# Printed by install.sh after every successful deploy:
+sed -i 's|^N8N_IMAGE_IDENTIFIER=.*|N8N_IMAGE_IDENTIFIER=@sha256:<prev>|' .env && docker compose up -d
 ```
-Or re‑run `install.sh` and supply the target version when prompted.
+Simply copy and run the printed command. The previous `N8N_IMAGE_IDENTIFIER` (digest or tag) is captured automatically before it is overwritten.
+
+Alternatively, re‑run `install.sh` and supply the target version when prompted. `upgrade.sh` also performs an automatic rollback if the upgraded container fails its health check.
 
 ### ⏱️ Re‑Scan & Patch Cadence
 | Trigger | Action |
 |---------|--------|
 | Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans the SBOM of all promoted releases; opens a GitHub Issue on new findings |
 | New CVE in CISA KEV list | Issue opened automatically on next scan – treat as P1 |
-| New vendor release | Run promotion pipeline manually |
+| New vendor release | Run promotion pipeline manually; or let **auto‑upgrade** handle deployment (see below) |
+| Daily 03:00 (optional) | `upgrade.sh` checks for new releases, upgrades, verifies health, rolls back on failure |
 
 ---
 
@@ -164,9 +165,23 @@ gh auth login
 # Run the interactive installer
 chmod +x install.sh
 ./install.sh
-# Prompts: host IP, version (or auto‑resolve), resource limits, provenance verification
 ```
-**Automation mode** (no prompts): `./install.sh --skip-verify`
+`install.sh` prompts for:
+- **Host IP** – auto‑detected, confirm or override
+- **Version** – explicit semver or auto‑resolve latest from GitHub Releases
+- **Resource limits** – memory, CPU, PID caps (CIS hardening)
+- **GHCR digest** – fetched automatically from the release body; the bare hex hash is accepted and `sha256:` is prepended automatically
+- **Provenance verification** – `gh attestation verify` against SLSA attestation
+- **Auto‑upgrade** – optionally registers a daily cron job (`upgrade.sh`) that checks for new releases, upgrades, health‑checks the container, and **auto‑rolls back** if it fails
+
+**Automation mode** (CI / no prompts): `./install.sh --skip-verify`
+
+### 🔁 Manual Upgrade
+```bash
+./upgrade.sh          # upgrade if a newer version is available
+./upgrade.sh --force  # upgrade regardless of current version
+```
+Upgrade log is written to `upgrade.log` in the same directory.
 
 ---
 
