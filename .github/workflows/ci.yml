@@ -102,7 +102,11 @@ jobs:
 
       - name: Prepare Tracee helper scripts
         run: |
-          chmod +x .github/scripts/collect_package_files.sh .github/scripts/run_tracee_reachability.sh
+          chmod +x .github/scripts/collect_package_files.sh .github/scripts/run_tracee_reachability.sh .github/scripts/test_tracee_merge.sh
+
+      - name: Verify Tracee merge fixture
+        run: |
+          .github/scripts/test_tracee_merge.sh
 
       - name: Pull test image
         run: |

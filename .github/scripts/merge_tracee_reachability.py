@@ -4,7 +4,7 @@ Merge Tracee runtime evidence into a Trivy report and annotate each finding
 with a package-level reachability signal.
 
 Usage:
-    python3 merge_tracee_reachability.py <trivy-report-in.json> <package-files.tsv> <tracee-events.jsonl> <target-container-id> <trivy-report-out.json>
+    python3 merge_tracee_reachability.py <trivy-report-in.json> <package-files.tsv> <tracee-events.jsonl> <target-container-id|target-container-id-file> <trivy-report-out.json>
 """
 
 import json
@@ -107,7 +107,9 @@ def load_observed_paths(tracee_path, target_container_id):
                 continue
 
             container_ids = extract_container_ids(event)
-            if container_ids and not any(cid.startswith(target_prefix) or target_container_id.startswith(cid) for cid in container_ids):
+            if not container_ids:
+                continue
+            if not any(cid.startswith(target_prefix) or target_container_id.startswith(cid) for cid in container_ids):
                 continue
 
             if extract_event_name(event) not in {"sched_process_exec", "shared_object_loaded", "security_file_open"}:
@@ -127,11 +129,21 @@ def load_observed_paths(tracee_path, target_container_id):
 def main():
     if len(sys.argv) != 6:
         print(
-            "Usage: python3 merge_tracee_reachability.py <trivy-report-in.json> <package-files.tsv> <tracee-events.jsonl> <target-container-id> <trivy-report-out.json>"
+            "Usage: python3 merge_tracee_reachability.py <trivy-report-in.json> <package-files.tsv> <tracee-events.jsonl> <target-container-id|target-container-id-file> <trivy-report-out.json>"
         )
         sys.exit(1)
 
-    report_in, package_tsv, tracee_events, target_container_id, report_out = sys.argv[1:]
+    report_in, package_tsv, tracee_events, target_container_ref, report_out = sys.argv[1:]
+
+    try:
+        with open(target_container_ref) as f:
+            target_container_id = f.read().strip()
+    except OSError:
+        target_container_id = target_container_ref.strip()
+
+    if not target_container_id:
+        print("Target container id is empty.")
+        sys.exit(1)
 
     with open(report_in) as f:
         report = json.load(f)
