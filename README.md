@@ -1,59 +1,96 @@
-# Secure Deploy
+# Secure Deploy: Reference Architecture for Vendor Image Promotion
 
 [![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 [![Re-Scan](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml)
 
-## Industry Framing
+Secure Deploy is a practical reference implementation for promoting third-party container images through a more controlled, evidence-driven pipeline. Instead of trusting an upstream tag and stopping at a CVE list, this repository demonstrates how to combine supply chain integrity, risk-based vulnerability enrichment, and runtime hardening in one GitHub Actions workflow.
 
-When teams design a secure CI/CD pipeline, a few industry references are commonly used together, but for different purposes.
+The current example workload is `n8nio/n8n`, chosen because it is a realistic application with a meaningful dependency tree and enough package noise to make severity-only decisions unhelpful.
 
-Think of them this way:
+## Industry References
 
-- `OWASP Top 10 CI/CD Security Risks` tells you what the major CI/CD threats are.
-  The "Why".
-- `NIST SP 800-53` gives you a control vocabulary for how organizations mitigate those threats.
-  The "What".
-- `SLSA` gives you a supply chain integrity model for build and artifact trust.
-  The "How" for build integrity.
-- `NIST SP 800-204D` explains how software supply chain controls fit into a DevSecOps CI/CD architecture.
-  The "How" for the pipeline design.
+When teams design secure CI/CD and image-promotion workflows, these references are commonly used together:
 
-Taken together, these references help answer different parts of the same question:
+- `OWASP Top 10 CI/CD Security Risks`
+  - useful for identifying common CI/CD attack paths and failure modes
+- `NIST SP 800-53`
+  - useful for describing the control objectives behind approval, integrity, audit, and least-privilege decisions
+- `NIST SP 800-204D`
+  - useful for thinking about how supply chain controls fit into a DevSecOps pipeline
+- `SLSA`
+  - useful for reasoning about artifact integrity, provenance, and build trust
 
-- what can go wrong in CI/CD
-- what kinds of controls are expected
-- how build and artifact integrity can be strengthened
-- how those controls can be embedded into a DevSecOps delivery pipeline
+This repository is best read as a practical implementation aligned with parts of those references. It should not be read as a blanket compliance or certification claim.
 
-This repository should be read as a practical demonstration of some of those ideas, not as a full implementation of any one framework.
+## The Problem: Why Scans Alone Are Not Enough
 
-## What This Repository Demonstrates
+Vendor-image promotion pipelines often fail in predictable ways:
 
-Secure Deploy is a reference repository for securely ingesting, reviewing, promoting, and deploying vendor container images. This repository uses `n8nio/n8n` as the example workload, but the main purpose is to show how a promotion pipeline can combine policy, supply chain evidence, vulnerability context, runtime hardening, and operational controls.
+- `Tag drift`
+  - a mutable upstream tag can change silently
+- `dependency chain abuse`
+  - the upstream image may be legitimate, but still carry risky dependencies or newly disclosed flaws
+- `severity fatigue`
+  - teams get long lists of `CRITICAL` and `HIGH` findings without enough context to decide what really needs a hard stop
+- `context blindness`
+  - a vulnerable package may exist on disk even if the relevant files are not exercised during normal runtime behavior
+- `day-2 drift`
+  - an image that looked acceptable during promotion can become riskier later as KEV and EPSS data change
 
-The central idea is simple: do not trust a vendor image tag just because it exists. Resolve the exact digest, evaluate its risk, decide whether it is auto-eligible or needs human approval, then publish a trusted image with release evidence and rollback information.
+This repository exists to address those problems directly.
 
-This repository currently does the following:
+## Pipeline Architecture
 
-- restricts ingestion to an allowlisted upstream image source
-- resolves and pins an immutable digest before promotion
-- scans with Trivy and enriches findings with KEV, EPSS, and CVE age
-- records Tracee reachability data as analyst context
-- uses manual approval only for higher-risk `CRITICAL` and `HIGH` cases
-- attests promoted images and publishes GitHub Releases with rollback details
-- re-scans only the latest promoted release on a schedule
-- retains only the latest 3 promoted GitHub releases
+```mermaid
+flowchart TD
+    subgraph Intake["1. Secure Intake"]
+        A["Manual promotion request or weekly version check"] --> B["Allowlist and semver policy"]
+        B --> C["Resolve immutable digest"]
+    end
 
-## Why n8n
+    subgraph Analysis["2. Risk Enrichment"]
+        C --> D["Trivy vulnerability scan"]
+        C --> E["Tracee smoke run"]
+        D --> F["KEV, EPSS, and CVE age enrichment"]
+        E --> F
+    end
 
-`n8n` is a useful reference workload because it represents a modern application with a non-trivial dependency tree and a realistic containerized runtime. That makes it a good example for:
+    subgraph Gate["3. Decision Logic"]
+        F --> G{"Approval gate"}
+        G -->|Lower-risk path| H["Auto-promote"]
+        G -->|Higher-risk path| I["Manual approval required"]
+    end
 
-- noisy CVE output from layered dependencies
-- a real need for enrichment beyond severity alone
-- runtime reachability experiments against a practical application process
+    subgraph Trust["4. Provenance and Release"]
+        H --> J["Push trusted image to GHCR"]
+        I --> J
+        J --> K["Attest provenance and SBOM"]
+        K --> L["Create GitHub Release with rollback metadata"]
+        L --> M["Retain latest 3 releases"]
+    end
 
-The repo is not specific to `n8n` as a concept. `n8n` is simply a credible example for demonstrating the promotion pattern.
+    subgraph Monitor["5. Day-2 Operations"]
+        M --> N["Weekly re-scan of latest promoted release"]
+        N --> O["Open issue if risk crosses review threshold"]
+    end
+```
+
+## Threat Model Mapping
+
+This repository is intended to reduce a specific set of CI/CD and vendor-ingestion risks.
+
+| Threat pattern | Why it matters here | Primary control in this repo |
+| :--- | :--- | :--- |
+| Dependency chain abuse | A trusted vendor image can still introduce risky or newly vulnerable components | digest pinning, Trivy scan, KEV/EPSS/age enrichment |
+| Artifact substitution or tag drift | A mutable upstream tag can change without notice | resolve and pin immutable digest before promotion |
+| Insufficient flow control | High-risk images can move too far through the pipeline without a human decision | `trusted-promotion` environment for manual approval |
+| Weak artifact integrity evidence | Teams need more than “the scan passed” to trust a promoted artifact | provenance attestation, SBOM attestation, release evidence |
+| Weak pipeline identity model | Long-lived publish credentials increase exposure if leaked | ephemeral `GITHUB_TOKEN` for GHCR actions, short-lived workflow identity for attestation flows |
+| Insufficient day-2 monitoring | A previously accepted image can later become more urgent | weekly re-scan of the latest promoted release |
+| Runtime over-privilege | A promoted image can still be dangerous if it runs with too much privilege | Docker runtime hardening in `iac/n8n` |
+
+This means the repository is not only “a scanner pipeline.” It is an attempt to treat vendor image ingestion as a CI/CD and supply-chain trust problem.
 
 ## Quick Start
 
@@ -70,332 +107,196 @@ To run promotion manually:
 
 1. Open `Actions`
 2. Select `Image Promotion (Trusted Source)`
-3. Choose a version or leave the default if you want the workflow to resolve the latest supported release
+3. Provide a version, or use the default input if you want the workflow to resolve the latest supported upstream version
 
-## Workflow Snapshot
+## Intelligence-Driven Approval Gate
 
-```mermaid
-flowchart LR
-    subgraph Intake["Intake"]
-        A["Manual dispatch or weekly version check"]
-        B["Allowlist + semver policy"]
-        C["Resolve exact vendor digest"]
-    end
+The promotion gate is intentionally not based on CVE severity alone.
 
-    subgraph Analysis["Analysis"]
-        D["Trivy scan"]
-        E["Tracee smoke run"]
-        F["KEV + EPSS + CVE age enrichment"]
-    end
+### What a CVE does and does not tell you
 
-    subgraph Decision["Decision"]
-        G{"Approval gate"}
-        H["Auto promotion"]
-        I["Manual approval"]
-    end
+A `CVE` identifier tells you that a known vulnerability exists. It does not, by itself, fully answer:
 
-    subgraph Publish["Publish"]
-        J["Push trusted image to GHCR"]
-        K["Attest provenance and SBOM"]
-        L["Create GitHub Release"]
-        M["Keep latest 3 releases"]
-    end
-
-    subgraph Monitor["Monitor"]
-        N["Weekly re-scan of latest promoted release"]
-    end
-
-    A --> B --> C --> D
-    C --> E
-    D --> F
-    E --> F
-    F --> G
-    G -->|Auto-eligible| H --> J
-    G -->|Manual review required| I --> J
-    J --> K --> L --> M --> N
-```
-
-## Threat Model
-
-The pipeline exists because vendor-image ingestion has some common and repeatable attack paths.
-
-The table below shows the main CI/CD threat patterns this repo is trying to reduce.
-
-| Threat pattern | Why it matters in vendor ingestion | Example reference | Primary control in this repo |
-| :--- | :--- | :--- | :--- |
-| Mutable or substituted artifacts | A tag can move or be replaced without the operator realizing it | OWASP CI/CD risk themes around artifact integrity and dependency abuse | digest pinning and semver-only policy |
-| Dependency chain abuse | A trusted upstream can still carry risky dependencies or vulnerable packages | OWASP CI/CD dependency chain abuse | Trivy plus KEV, EPSS, and CVE age enrichment |
-| Weak approval flow | High-risk findings can be promoted too easily if the workflow has no pause point | OWASP CI/CD flow control mechanisms | `trusted-promotion` manual approval gate |
-| Weak identity and trust boundaries | Long-lived credentials or ambiguous builder identity weaken the pipeline | NIST 800-53 and NIST 800-204D control intent | ephemeral `GITHUB_TOKEN` for GHCR, `id-token: write` for attestation flows |
-| Low auditability | Teams need to know what was promoted, when, and under what risk posture | NIST 800-53 audit and integrity control mindset | GitHub Releases, artifacts, summaries, attestations |
-| Runtime over-privilege | Even a reviewed image can do too much damage if the container is too permissive | CIS Docker Benchmark and least-privilege practice | hardened compose settings in `iac/n8n` |
-
-This is why the narrative for this repo is not simply "scan and deploy." It is "treat vendor ingestion as a supply chain and CI/CD threat surface."
-
-## Operating Context
-
-### What
-
-This is a secure image-ingestion and promotion pipeline for vendor containers.
-
-### Why
-
-Container promotion is not only a vulnerability-scanning problem. A team also needs to know:
-
-- whether the image really came from the intended source
-- whether a severe CVE is also likely to be exploited
-- whether risk is low enough for automation or high enough for review
-- whether the approval and rollback history can be reconstructed later
-
-### Who
-
-This repository is aimed at:
-
-- platform or DevSecOps engineers operating promotion workflows
-- security reviewers approving exceptions
-- operators deploying promoted images
-- auditors and incident responders who need release evidence
-
-### When
-
-- `weekly-version-check.yml` checks for a newer upstream release
-- `image-promotion.yml` runs when promotion is requested
-- `rescan.yml` runs weekly against the latest promoted release
-- `ci.yml` validates the repo and helper logic on code changes
-
-### Where
-
-- workflow logic lives in `.github/workflows/`
-- enrichment and reporting helpers live in `.github/scripts/`
-- policy lives in `policy/`
-- runtime deployment hardening lives in `iac/n8n/`
-
-### How
-
-The pipeline layers controls instead of depending on one control:
-
-- policy restricts what can be ingested
-- digest pinning fixes the exact artifact under review
-- Trivy identifies vulnerabilities
-- KEV, EPSS, and CVE age refine risk decisions
-- Tracee adds runtime context
-- attestations and releases preserve provenance and auditability
-- Docker hardening reduces runtime blast radius after deployment
-
-## Approval Gate
-
-The promotion gate is intentionally risk-based, not severity-only.
-
-### What A CVE Is
-
-`CVE` stands for Common Vulnerabilities and Exposures. A CVE identifier such as `CVE-2026-12345` is a public identifier for a known vulnerability.
-
-A CVE alone does not fully tell you:
-
-- whether it is being actively exploited
+- whether the CVE is known to be exploited in the wild
 - how likely exploitation is in the near term
-- whether the affected code path matters for your workload
-- whether the issue is still within a short remediation window or has remained exposed for a long time
+- whether the vulnerable code is meaningfully exercised by the workload
+- whether the finding is fresh or has remained open long enough to require stricter review
 
-That is why this repository does not treat CVE severity alone as the approval decision.
+That is why this pipeline layers more than one signal into the approval decision.
 
-### Why More Than Severity Is Used
+### Risk Enrichment Signals
 
-| Signal | What it adds |
-| :--- | :--- |
-| Severity | Base impact estimate if exploited |
-| KEV | Evidence that the CVE is already known to be exploited in the wild |
-| EPSS | Probability estimate of exploitation in the next 30 days |
-| CVE age | Time dimension for whether a fresh finding is still within a short tolerance window |
-| Reachability | Runtime context about whether vulnerable package files were observed during the smoke run |
+- `CISA KEV`
+  - tells you whether the CVE is already known to be exploited in the wild
+  - in this repository, KEV acts as the strongest urgency signal for `CRITICAL` and `HIGH` findings
 
-### Current Gate Policy
+- `EPSS`
+  - estimates the probability of exploitation in the next 30 days
+  - in this repository, EPSS is used as a probability-based signal for whether a not-yet-KEV finding still deserves manual review
+
+- `CVE age`
+  - adds a time dimension so that a “fresh but not yet patched” finding is treated differently from an older exposure
+
+- `Tracee reachability`
+  - records runtime exec/load/file evidence during a smoke run
+  - used today as analyst context, not as an approval-gate input
+
+### Gate Policy
 
 For `CRITICAL` and `HIGH` findings:
 
-- auto-promotion is allowed when the finding is under 30 days old, not in KEV, and below this repository's manual-review EPSS threshold
-- manual approval is required when the finding is at least 30 days old, appears in KEV, or falls into this repository's `HIGH` or `CRITICAL` EPSS policy band
-
-`MEDIUM`, `LOW`, and `UNKNOWN` findings are still reported, but they do not currently trigger manual approval on their own.
+| Finding severity | KEV | EPSS | Age | Action |
+| :--- | :--- | :--- | :--- | :--- |
+| `CRITICAL` / `HIGH` | Yes | Any | Any | Manual review |
+| `CRITICAL` / `HIGH` | No | Above repo threshold | Any | Manual review |
+| `CRITICAL` / `HIGH` | No | Below repo threshold | At least 30 days | Manual review |
+| `CRITICAL` / `HIGH` | No | Below repo threshold | Under 30 days | Auto-promotion allowed |
+| `MEDIUM` / `LOW` / `UNKNOWN` | No | Any | Any | Reported, but does not directly trigger manual approval |
 
 The intended interpretation is:
 
 - `KEV` is the urgency signal
-  - if a `CRITICAL` or `HIGH` finding is in KEV, it goes straight to human review
 - `EPSS` is the probability signal
-  - it helps decide whether a not-yet-KEV finding still deserves manual review
 - `CVE age` is the tolerance-window signal
-  - it prevents a "temporary exception" from quietly becoming a long-lived exposure
 
-## EPSS Policy
+### EPSS Policy Bands
 
-EPSS is the FIRST Exploit Prediction Scoring System. It estimates the probability that a CVE will be exploited in the next 30 days.
+The labels below are repository policy thresholds, not official EPSS categories.
 
 Example: an EPSS score of `2.1%` means an estimated `2.1%` probability of exploitation in the next 30 days. In this repository, that is above the `2.0%` manual-review threshold for `CRITICAL` and `HIGH` findings.
-
-The table below is repository policy, not an official EPSS standard.
 
 | EPSS score | Repository policy band | Meaning | Action |
 | :--- | :--- | :--- | :--- |
 | `< 0.5%` | Low | Exploitation currently looks unlikely at scale | Does not block auto-promotion by itself |
-| `0.5% to < 2.0%` | Medium | Elevated likelihood, but below manual-review threshold | May still auto-promote if other gate checks are clear |
+| `0.5% to < 2.0%` | Medium | Elevated likelihood, but below manual-review threshold | May still auto-promote if other checks are clear |
 | `2.0% to < 10.0%` | High | Above this repository's manual-review threshold | Manual review for `CRITICAL` and `HIGH` findings |
 | `>= 10.0%` | Critical | Very high predicted exploitation likelihood | Treat as urgent; manual review for `CRITICAL` and `HIGH` findings |
 
-## Reachability Status
+## Reachability and the False-Positive Problem
 
-Tracee reachability data is collected and shown in vulnerability summaries as `Reachability = Yes/No`.
+Traditional image scanning tells you vulnerable code is present in the image. It does not tell you whether the relevant code path is actually exercised by the running workload.
 
-Why it matters:
+That matters because one of the hardest problems in vulnerability management is false-positive prioritization:
 
-- traditional image scanning tells you vulnerable code is present
-- reachability tries to answer whether vulnerable code was actually exercised during the smoke run
+- vulnerable package exists on disk
+- but the package may not be materially exercised in the runtime path you care about
 
-That matters because one of the biggest practical problems in vulnerability management is false-positive prioritization. A package can be vulnerable on disk without being materially exercised by the workload path you care about. Reachability analysis is an attempt to move from:
+This repository uses Tracee during a smoke run to add runtime context such as file loads and executable use. The goal is to move from:
 
-- "vulnerable package exists"
+- “vulnerable package exists”
 
-to:
+toward:
 
-- "vulnerable package exists and related files were observed during execution"
+- “vulnerable package exists and related files were observed during execution”
 
 Current status:
 
+- reachability is reported in vulnerability summaries as `Yes/No`
 - reachability is useful analyst context
-- reachability is not currently used as an approval-gate input
+- reachability is not currently used as an approval-gate parameter
 
 TODO:
 
 - verify that the current Tracee-based reachability approach is reliable enough across the supported image and runtime combinations
-- until that verification is complete, keep reachability out of the approval gate
-
-### Workflow Roles
-
-- `weekly-version-check.yml`
-  - checks whether a newer upstream `n8n` release exists
-  - dispatches promotion only when upstream is newer than the latest promoted release
-
-- `image-promotion.yml`
-  - resolves the upstream version and digest
-  - scans and enriches findings
-  - decides between auto-promotion and manual approval
-  - publishes the trusted image, attestations, and release
-  - prunes older releases down to the newest 3
-
-- `rescan.yml`
-  - re-scans only the latest promoted release
-  - opens an issue if the latest promoted release now crosses the manual-review threshold
-
-- `ci.yml`
-  - validates repository security checks and helper logic
+- only consider using it in the approval gate after that verification work is complete
 
 ## Identity, Trust, and Attestation
 
-This repository avoids long-lived registry credentials in the promotion path.
+This repository avoids long-lived registry credentials in the promotion path where possible.
 
-Current identity model:
+Current model:
 
 - GHCR authentication uses the repository-scoped ephemeral `GITHUB_TOKEN`
-- artifact attestation flows use GitHub Actions `id-token: write`
-- the promotion workflow therefore relies on short-lived workflow identity rather than a stored long-lived registry password or PAT for the publish path
+- attestation flows use GitHub Actions `id-token: write`
+- build provenance and SBOM attestation are produced in the GitHub Actions promotion path
 
-Attestation model:
+In practical terms:
 
-- build provenance is generated in GitHub Actions
-- SBOM attestation is generated in GitHub Actions
-- the promoted artifact path therefore treats GitHub Actions as the controlled promotion system for the trusted image release flow
+- the publish path does not depend on a stored long-lived registry password or personal access token for the normal GHCR workflow
+- the promoted artifact path treats GitHub Actions as the controlled builder and attestation environment for this repository
 
-This is a stronger model than storing static registry credentials, but it should still be described as the current repository design, not as a universal zero-trust guarantee.
+This is stronger than a static credential model, but it should still be described as the current repository design, not as a universal zero-trust guarantee across every connected system.
 
-## Framework Mapping
+## Framework Alignment
 
-This repository is easier to reason about when the frameworks are used for explanation rather than for broad compliance claims.
+These frameworks are useful here as explanatory lenses, not as blanket compliance claims.
+
+### OWASP Top 10 CI/CD Security Risks
+
+Use in this repo:
+
+- frames the pipeline as a threat surface, not just a delivery mechanism
+- helps explain why flow control, artifact integrity, identity, and visibility matter
+
+Concrete examples in this repo:
+
+- workflow separation and manual approval for higher-risk paths
+- digest pinning before promotion
+- attestation and release evidence for visibility and integrity
+- latest-release re-scan for day-2 monitoring
+
+### NIST SP 800-53
+
+Use in this repo:
+
+- provides the control vocabulary behind access control, integrity, auditability, and least privilege
+
+Concrete examples in this repo:
+
+- manual approval in `trusted-promotion`
+- policy-as-code and version constraints
+- workflow artifacts, summaries, and releases
+- runtime least-privilege settings in the hardened compose stack
+
+This repository does not claim full NIST SP 800-53 implementation. It applies a practical subset of ideas relevant to image promotion and deployment.
+
+### NIST SP 800-204D
+
+Use in this repo:
+
+- helps explain how software supply chain controls can be embedded into a DevSecOps pipeline rather than applied as an afterthought
+
+Concrete examples in this repo:
+
+- policy-driven intake
+- artifact-centric promotion decisions around digests, SBOMs, and provenance
+- scheduled re-scan of the active promoted release
+
+This repository is better described as aligned with parts of that guidance than as a complete implementation claim.
 
 ### SLSA
 
-What it is:
-- a framework for improving software supply chain integrity and provenance
+Use in this repo:
 
-How it is used here:
-- immutable digest pinning before promotion
+- helps explain artifact trust, provenance, and promotion integrity
+
+Concrete examples in this repo:
+
+- immutable digest pinning
 - provenance attestation for promoted images
 - SBOM attestation
 - release evidence tied to the promoted artifact
 
 Current maturity statement:
-- the promoted artifact path is designed to align most closely with `SLSA Level 3` concepts
-- this should not be read as an independent certification or universal claim over every upstream dependency or surrounding platform component
 
-Why this is the closest fit:
-- provenance is generated in a controlled GitHub Actions path
+- the promoted artifact path is designed to align most closely with `SLSA Level 3` concepts
+- this should not be read as an independent certification or a claim over every upstream dependency or external platform boundary
+
+Why that is the closest fit:
+
+- provenance is generated in the GitHub Actions promotion path
 - promoted artifacts are tied to immutable digests
 - attestation and release evidence are preserved for verification and audit use
 
-In short:
-- OWASP helps explain the threat model
-- NIST SP 800-53 helps explain the control mindset
-- SLSA helps explain artifact integrity and provenance
-- this repository uses those ideas to demonstrate a promotion path that is closer to SLSA Level 3 concepts than to lower-maturity ad hoc promotion
-
-### NIST SP 800-53
-
-What it is:
-- a catalog of security and privacy controls for information systems and organizations
-
-How it is used here:
-- as a control-oriented lens for explaining why the repo has approval gates, audit records, policy checks, integrity controls, and least-privilege runtime configuration
-
-Examples reflected in this repo:
-- access control via manual approval in `trusted-promotion`
-- configuration management via policy-as-code and version constraints
-- auditability via workflow artifacts, summaries, and releases
-- integrity controls via digest pinning, attestation, and scanning
-- least privilege via Docker runtime hardening
-
-This repo does not claim full NIST SP 800-53 implementation. It applies a practical subset of ideas relevant to image promotion and deployment.
-
-### NIST SP 800-204D
-
-What it is:
-- NIST guidance on strategies for integrating software supply chain security into DevSecOps CI/CD pipelines
-
-How it is used here:
-- as the closest architectural lens for the pipeline itself
-- the repo applies policy-driven CI/CD decisions around digests, provenance, SBOMs, release evidence, and post-promotion review
-
-Why it fits well:
-- SLSA helps describe supply chain integrity maturity
-- NIST SP 800-204D helps explain how those integrity controls fit into an operational DevSecOps pipeline
-
-This repo should be described as aligned with parts of that guidance, not as a blanket implementation claim.
-
-### OWASP Top 10 CI/CD Security Risks
-
-What it is:
-- an OWASP project that identifies major CI/CD-specific security risks
-
-How it is used here:
-- as a threat model for the pipeline, not just the image
-
-Examples that map well:
-- insufficient flow control mechanisms
-- inadequate identity and access management
-- dependency chain abuse
-- insecure system configuration
-- improper artifact integrity validation
-- insufficient logging and visibility
-
-This repository reduces several of those risks through workflow separation, approval gating, workflow permissions, attestation, policy checks, and release evidence.
-
 ## Docker Hardening
 
-Docker hardening is not the same thing as supply chain integrity, but it still matters.
+Docker hardening is not the same thing as supply chain integrity, but it is still part of the overall risk model.
 
 How to think about the split:
 
-- supply chain controls answer: "Can I trust what artifact I am promoting?"
-- approval-gate controls answer: "Is the current risk low enough for automation?"
-- Docker hardening answers: "If the workload or image is compromised, how much damage can the container do?"
+- supply chain controls answer: “Can I trust what artifact I am promoting?”
+- approval-gate controls answer: “Is the current risk low enough for automation?”
+- Docker hardening answers: “If the workload or image is compromised, how much damage can the container do?”
 
 In this repository, runtime hardening contributes by:
 
@@ -406,7 +307,43 @@ In this repository, runtime hardening contributes by:
 - constraining CPU and memory
 - applying AppArmor and related runtime restrictions
 
-This means Docker hardening does not raise SLSA maturity by itself. Instead, it complements the supply chain controls by reducing runtime blast radius after deployment.
+Docker hardening does not raise SLSA maturity by itself. It complements the supply chain controls by reducing runtime blast radius after deployment.
+
+## Day-2 Operations
+
+### Weekly Re-Scan
+
+- schedule: every Monday at `00:00 UTC`
+- scope: latest promoted release only
+- outcome:
+  - no action if it remains acceptable under the current gate policy
+  - issue creation if it now requires manual review
+
+### Remediation Workflow
+
+When `rescan.yml` opens an issue, the recommended operating response is:
+
+1. triage whether the trigger was KEV, EPSS, CVE age, or a combination
+2. decide whether a newer upstream release should be promoted
+3. if no acceptable newer version exists, document the exception and risk owner
+4. update deployment plans so the latest promoted image is revisited promptly
+
+Suggested response expectation:
+
+- KEV-triggered `CRITICAL` or `HIGH` findings should be treated as immediate human-review items
+- EPSS- or age-triggered findings should be handled on an accelerated remediation timeline, even if not yet known exploited
+
+### Artifact Format and Forward Path
+
+Current artifact choices:
+
+- SBOM format: `SPDX JSON`
+- provenance: GitHub build provenance and attestation flow
+
+Forward-looking gap:
+
+- `VEX` is not emitted today
+- adding VEX would be a logical next step if the project wants to move from “vulnerabilities listed” toward “exploitability and affectedness stated more explicitly”
 
 ## Repository Structure
 
@@ -434,47 +371,7 @@ This means Docker hardening does not raise SLSA maturity by itself. Instead, it 
     └── upgrade.sh
 ```
 
-## Operating Model
-
-### Promotion
-
-1. Run `Image Promotion (Trusted Source)` manually, or let the weekly version check dispatch it when a newer upstream version exists.
-2. The workflow resolves the exact digest and evaluates the image.
-3. Findings are enriched with KEV, EPSS, CVE age, and reachability context.
-4. The workflow either auto-promotes or pauses for manual approval.
-5. On success, the trusted image is pushed to GHCR, attested, released, and old releases are pruned down to the newest 3.
-
-### Re-Scan
-
-- schedule: every Monday at `00:00 UTC`
-- scope: latest promoted release only
-- outcome:
-  - no action if it remains acceptable under the current gate policy
-  - issue creation if it now requires manual review
-
-### Remediation Workflow
-
-When `rescan.yml` opens an issue, the recommended operating response is:
-
-1. triage whether the issue was triggered by KEV, EPSS, CVE age, or a combination
-2. decide whether a newer upstream release should be promoted
-3. if no acceptable newer version exists, document the exception and risk owner
-4. update deployment plans so the latest promoted image is revisited promptly
-
-Suggested response expectation:
-
-- KEV-triggered `CRITICAL` or `HIGH` findings should be treated as immediate human-review items
-- EPSS or age-triggered findings should be reviewed on an accelerated patching timeline, even if not yet known exploited
-
-### Release Retention
-
-- keep the latest 3 promoted GitHub releases
-- intended purpose:
-  - current release
-  - previous release
-  - one additional rollback candidate
-
-## Deployment
+## Deployment and Verification
 
 ```bash
 git clone https://github.com/svveec0d3/secure-deploy.git
@@ -491,18 +388,6 @@ chmod +x install.sh
 - deployment and rollback support
 - optional auto-upgrade with `upgrade.sh`
 
-## Artifact Format and Forward Path
-
-Current artifact choices:
-
-- SBOM format: `SPDX JSON`
-- provenance: GitHub artifact attestation / build provenance flow
-
-Forward-looking gap:
-
-- `VEX` is not emitted today
-- adding VEX in the future would be a logical next step if the project wants to move from "list vulnerabilities" toward "state exploitability and affectedness more explicitly"
-
 ## References
 
 - [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
@@ -513,4 +398,4 @@ Forward-looking gap:
 - [OWASP Top 10 CI/CD Security Risks](https://owasp.org/www-project-top-10-ci-cd-security-risks/)
 - [SLSA v1.0 specification](https://slsa.dev/spec/v1.0/)
 
-This README is descriptive documentation for the current workflow behavior. If the workflows or policies change, this document should be updated to match the implementation.
+This README is descriptive documentation for the current repository behavior. If the workflows or policies change, this document should be updated to match the implementation.
