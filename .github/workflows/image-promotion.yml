@@ -441,6 +441,26 @@ jobs:
             N8N_IMAGE_DIGEST=${{ steps.docker_push.outputs.digest }}
             ```
 
+      - name: Prune old GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OLD_TAGS=$(gh release list \
+            --repo "${{ github.repository }}" \
+            --limit 50 \
+            --json tagName \
+            --jq '[.[].tagName | select(startswith("n8n-"))] | sort_by(sub("^n8n-"; "") | split(".") | map(tonumber)) | reverse | .[3:][]')
+
+          if [ -z "$OLD_TAGS" ]; then
+            echo "No old releases to prune."
+            exit 0
+          fi
+
+          for tag in $OLD_TAGS; do
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --repo "${{ github.repository }}" --cleanup-tag -y
+          done
+
   promote-images-manual:
     name: Manual Approval Promotion (Vulnerable Image)
     needs: scan-images
@@ -544,3 +564,23 @@ jobs:
             N8N_IMAGE_VERSION=${{ needs.scan-images.outputs.resolved_version }}
             N8N_IMAGE_DIGEST=${{ steps.docker_push.outputs.digest }}
             ```
+
+      - name: Prune old GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OLD_TAGS=$(gh release list \
+            --repo "${{ github.repository }}" \
+            --limit 50 \
+            --json tagName \
+            --jq '[.[].tagName | select(startswith("n8n-"))] | sort_by(sub("^n8n-"; "") | split(".") | map(tonumber)) | reverse | .[3:][]')
+
+          if [ -z "$OLD_TAGS" ]; then
+            echo "No old releases to prune."
+            exit 0
+          fi
+
+          for tag in $OLD_TAGS; do
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --repo "${{ github.repository }}" --cleanup-tag -y
+          done

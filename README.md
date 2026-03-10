@@ -36,7 +36,7 @@ A reference implementation that shows **how to securely ingest, verify and deplo
 | Delayed CVE exposure | **FIRST EPSS enrichment** | Pulls EPSS for every discovered CVE and classifies exploitation likelihood. | Separates fresh low-probability findings from urgent exploitation risk. | **Level 2** |
 | Runtime escape | **CIS Docker Benchmark v1.6.0 (Section 5)** | Enforced via `policy/runtime‑hardening‑policy.yml` – read‑only FS, `no‑new‑privileges`, `cap_drop: ALL`, AppArmor, non‑root user, resource limits, custom network. | Reduces blast radius, enforces least privilege. | **Level 2** |
 | Operational gaps | **Approval gate** | `trusted‑promotion` environment requires manual review for flagged images. | Human risk acceptance decision. | **Level 2** |
-| Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans the SBOM of all promoted releases; opens issue on new findings. | Continuous compliance monitoring. | **Level 2** |
+| Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans only the latest promoted release; opens issue on new findings. | Continuous compliance monitoring on the active release. | **Level 2** |
 | Operational gaps | **Host verification script** | `install.sh` runs `gh attestation verify` against exact digest before deployment. | Guarantees host runs the exact promoted image. | **Level 3** |
 
 **SLSA Maturity**: This repository demonstrates **SLSA Level 3**. By generating signed provenance attestations for every promoted image, pinning digests, and publishing reproducible SBOMs, it meets the requirements for automated provenance verification and reproducible builds, which are the hallmarks of Level 3.
@@ -96,7 +96,7 @@ For example, an EPSS score of `2.1%` means a modeled `2.1%` probability of explo
 ├── .github/workflows/
 │   ├── ci.yml               # Pre‑merge: IaC & secret scan + CIS compliance (blocks on findings)
 │   ├── image‑promotion.yml  # Vendor image ingestion, EPSS/KEV/age gating, attestation, promotion
-│   └── rescan.yml           # Weekly re‑scan of promoted release SBOMs
+│   └── rescan.yml           # Weekly re‑scan of the latest promoted release
 │
 └── iac/n8n/
     ├── docker-compose.yml   # CIS‑hardened stack (read‑only FS, non‑root, AppArmor, limits)
@@ -136,7 +136,10 @@ Alternatively, re‑run `install.sh` and supply the target version when prompted
 ### ⏱️ Re‑Scan & Patch Cadence
 | Trigger | Action |
 |---------|--------|
-| Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans the SBOM of all promoted releases; opens a GitHub Issue on new findings |
+| Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans only the latest promoted release; opens a GitHub Issue on new findings |
+
+Release retention:
+- Keep only the latest 3 GitHub releases: the newest release plus the prior 2 versions.
 | New CVE in CISA KEV list | Issue opened automatically on next scan – treat as P1 |
 | Existing CVE crosses EPSS HIGH threshold | Issue opened automatically on next scan – re-evaluate exception immediately |
 | New vendor release | Run promotion pipeline manually; or let **auto‑upgrade** handle deployment (see below) |
