@@ -1,7 +1,7 @@
 name: Continuous Re-Scan (Image Lifecycle)
 
-# Runs weekly to detect new CVEs or KEV entries on previously promoted images.
-# If a clean image develops new findings, a GitHub Issue is automatically opened.
+# Runs weekly to detect when previously promoted images become ineligible under
+# the current age/KEV/EPSS promotion policy.
 on:
   schedule:
     - cron: '0 0 * * 1'   # Every Monday at 00:00 UTC
@@ -68,7 +68,7 @@ jobs:
           # Write the master summary header
           echo "## 🛡️ Weekly Re-Scan Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Version | CRITICAL | HIGH | MEDIUM | LOW/UNKNOWN | KEV | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | CRITICAL | HIGH | MEDIUM | LOW/UNKNOWN | Manual Review | Status |" >> $GITHUB_STEP_SUMMARY
           echo "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |" >> $GITHUB_STEP_SUMMARY
 
           for TAG in $RELEASES; do
@@ -88,7 +88,7 @@ jobs:
             # Full image scan — same method as image-promotion for consistent results
             trivy image \
               --format json \
-              --output "rescan-$VERSION.json" \
+              --output "rescan-$VERSION.raw.json" \
               --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
               "$IMAGE" || true
 
@@ -101,38 +101,29 @@ jobs:
             # Record this version was successfully scanned
             SCANNED_TAGS="$SCANNED_TAGS $VERSION"
 
+            python3 .github/scripts/enrich_findings.py "rescan-$VERSION.raw.json" kev.json "rescan-$VERSION.json"
+
             # Count findings by severity
             CRIT_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             MED_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
             LOW_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW" or .Severity=="UNKNOWN")] | length' "rescan-$VERSION.json" 2>/dev/null || echo 0)
-            CRIT_HIGH_COUNT=$((CRIT_COUNT + HIGH_COUNT))
-
-            HAS_CRIT_HIGH=false
-            [ "$CRIT_HIGH_COUNT" -gt 0 ] && HAS_CRIT_HIGH=true
-
-            # Check for KEV matches
-            KEV_IDS=$(jq -r '.vulnerabilities[].cveID' kev.json)
-            ALL_VULNS=$(jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | unique | .[]' "rescan-$VERSION.json" 2>/dev/null || echo "")
-            KEV_HIT=false
-            KEV_LIST=""
-            for CVE in $ALL_VULNS; do
-              if echo "$KEV_IDS" | grep -q "$CVE"; then
-                SEVERITY=$(jq -r ".Results[]?.Vulnerabilities[]? | select(.VulnerabilityID==\"$CVE\") | .Severity" "rescan-$VERSION.json" | head -1)
-                KEV_LIST="$KEV_LIST\n  - $CVE ($SEVERITY — KEV)"
-                KEV_HIT=true
-              fi
-            done
+            MANUAL_REVIEW_COUNT=$(jq -r '.AnalysisSummary.manual_review_count // 0' "rescan-$VERSION.json")
+            AUTO_ELIGIBLE_COUNT=$(jq -r '.AnalysisSummary.auto_allowed_critical_high_count // 0' "rescan-$VERSION.json")
+            AGE_REVIEW_COUNT=$(jq -r '.AnalysisSummary.older_than_30_days_count // 0' "rescan-$VERSION.json")
+            KEV_REVIEW_COUNT=$(jq -r '.AnalysisSummary.kev_critical_high_count // 0' "rescan-$VERSION.json")
+            EPSS_REVIEW_COUNT=$(jq -r '.AnalysisSummary.epss_high_or_critical_count // 0' "rescan-$VERSION.json")
+            UNKNOWN_AGE_REVIEW_COUNT=$(jq -r '.AnalysisSummary.unknown_age_critical_high_count // 0' "rescan-$VERSION.json")
 
             # Overview table row
-            if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
-              STATUS="🔴 Alert"
+            if [ "$MANUAL_REVIEW_COUNT" -gt 0 ]; then
+              STATUS="🟠 Manual Review"
+            elif [ "$AUTO_ELIGIBLE_COUNT" -gt 0 ]; then
+              STATUS="✅ Auto Eligible"
             else
               STATUS="✅ Clean"
             fi
-            KEV_EMOJI="No"
-            [ "$KEV_HIT" = true ] && KEV_EMOJI="✅ Yes"
-            echo "| $VERSION | $CRIT_COUNT | $HIGH_COUNT | $MED_COUNT | $LOW_COUNT | $KEV_EMOJI | $STATUS |" >> $GITHUB_STEP_SUMMARY
+            echo "| $VERSION | $CRIT_COUNT | $HIGH_COUNT | $MED_COUNT | $LOW_COUNT | $MANUAL_REVIEW_COUNT | $STATUS |" >> $GITHUB_STEP_SUMMARY
 
             # Per-version detailed vulnerability section
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -141,14 +132,17 @@ jobs:
             python3 .github/scripts/generate_summary.py "rescan-$VERSION.json" kev.json "$VERSION" || true
 
             # Escalate if alert condition triggers
-            if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
+            if [ "$MANUAL_REVIEW_COUNT" -gt 0 ]; then
               ALERT_FOUND=true
               ALERT_BODY="$ALERT_BODY\n\n### \`n8n-trusted:$VERSION\`\n"
-              [ "$HAS_CRIT_HIGH" = true ] && ALERT_BODY="$ALERT_BODY- 🔴 **$CRIT_HIGH_COUNT CRITICAL/HIGH CVE(s)** detected\n"
-              [ "$KEV_HIT" = true ] && ALERT_BODY="$ALERT_BODY- 🚨 **KEV matches** (actively exploited):\n$KEV_LIST\n"
+              ALERT_BODY="$ALERT_BODY- 🟠 **$MANUAL_REVIEW_COUNT finding(s)** now require manual review under the promotion gate\n"
+              [ "$AGE_REVIEW_COUNT" -gt 0 ] && ALERT_BODY="$ALERT_BODY- ⏱️ **$AGE_REVIEW_COUNT** critical/high CVE(s) are now at least 30 days old\n"
+              [ "$KEV_REVIEW_COUNT" -gt 0 ] && ALERT_BODY="$ALERT_BODY- 🚨 **$KEV_REVIEW_COUNT** critical/high CVE(s) now match KEV\n"
+              [ "$EPSS_REVIEW_COUNT" -gt 0 ] && ALERT_BODY="$ALERT_BODY- 📈 **$EPSS_REVIEW_COUNT** critical/high CVE(s) are now EPSS HIGH/CRITICAL\n"
+              [ "$UNKNOWN_AGE_REVIEW_COUNT" -gt 0 ] && ALERT_BODY="$ALERT_BODY- ❓ **$UNKNOWN_AGE_REVIEW_COUNT** critical/high CVE(s) have unknown published dates\n"
               echo "  ⚠️  Alert triggered for $VERSION"
             else
-              echo "  ✅ $VERSION is still clean"
+              echo "  ✅ $VERSION remains auto-eligible"
             fi
           done
 
@@ -171,7 +165,7 @@ jobs:
           cat << EOF > issue_body.md
           ## Weekly Re-Scan Alert
 
-          One or more previously promoted images now have **new CRITICAL/HIGH CVEs or CISA KEV matches**.
+          One or more previously promoted images are now **ineligible under the current age/KEV/EPSS promotion gate**.
 
           **Action required**: Review the findings below and decide whether to:
           1. Promote a newer clean version via the Image Promotion pipeline
@@ -189,7 +183,7 @@ jobs:
 
           gh issue create \
             --repo "${{ github.repository }}" \
-            --title "🚨 Re-Scan Alert: Previously promoted image(s) have new vulnerability findings" \
+            --title "🚨 Re-Scan Alert: promoted image(s) now require manual review" \
             --body-file issue_body.md \
             --label "security"
 

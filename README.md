@@ -30,8 +30,9 @@ A reference implementation that shows **how to securely ingest, verify and deplo
 | Unknown provenance | **Source allowlist** | `policy/image‑ingestion‑policy.yml` restricts to `n8nio/n8n` with strict `x.y.z` semver. | Blocks unexpected sources. | **Level 2** |
 | Missing audit trail | **SBOM generation** | Syft creates SPDX SBOM; stored as artifact and attested. | Full component inventory for compliance. | **Level 2** |
 | Missing audit trail | **Versioned GitHub Releases** | Each promotion creates a release with digest, SBOM, and provenance links. | Immutable record of deployment. | **Level 3** |
-| Delayed CVE exposure | **Trivy CVE scan** | Scans all severities; fails on CRITICAL/HIGH. | Early detection of vulnerable images. | **Level 2** |
-| Delayed CVE exposure | **CISA KEV cross‑reference** | Automated check against known‑exploited CVE list. | Blocks actively exploited vulnerabilities. | **Level 2** |
+| Delayed CVE exposure | **Trivy CVE scan** | Scans all severities and enriches each CVE with age, KEV, and EPSS context. | Early detection with exploitability context. | **Level 2** |
+| Delayed CVE exposure | **CISA KEV cross‑reference** | Automated check against known‑exploited CVE list. | Blocks actively exploited CRITICAL/HIGH vulnerabilities. | **Level 2** |
+| Delayed CVE exposure | **FIRST EPSS enrichment** | Pulls EPSS for every discovered CVE and classifies exploitation likelihood. | Separates fresh low-probability findings from urgent exploitation risk. | **Level 2** |
 | Runtime escape | **CIS Docker Benchmark v1.6.0 (Section 5)** | Enforced via `policy/runtime‑hardening‑policy.yml` – read‑only FS, `no‑new‑privileges`, `cap_drop: ALL`, AppArmor, non‑root user, resource limits, custom network. | Reduces blast radius, enforces least privilege. | **Level 2** |
 | Operational gaps | **Approval gate** | `trusted‑promotion` environment requires manual review for flagged images. | Human risk acceptance decision. | **Level 2** |
 | Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans the SBOM of all promoted releases; opens issue on new findings. | Continuous compliance monitoring. | **Level 2** |
@@ -50,19 +51,30 @@ flowchart TD
     C -->|allowlist & semver| D[Cosign Verify]
     D --> E[Digest Resolve]
     E --> F[Trivy Scan]
-    F --> G[KEV Cross‑Reference]
-    G --> H{Result}
-    H -->|Clean| I[Auto‑Promote]
-    H -->|Vuln / KEV| J["Manual Approval (trusted‑promotion)"]
+    F --> G[KEV + EPSS + Age Enrichment]
+    G --> H{Gate Decision}
+    H -->|No findings or fresh low-risk critical/high| I[Auto‑Promote]
+    H -->|Aged / KEV / high-EPSS critical/high| J["Manual Approval (trusted‑promotion)"]
     I --> K[Attest Provenance & SBOM]
     J --> K
     K --> L[GitHub Release + Rollback Info]
     L -.->|SBOM used for| M{Weekly Re-scan}
 ```
 
-* **Auto‑Promote** – No findings, image is pushed to GHCR and released.
-* **Manual Approval** – Critical/High CVEs or KEV hit require reviewer sign‑off.
+* **Auto‑Promote** – No findings, or only CRITICAL/HIGH CVEs that are under 30 days old, not in KEV, and below the EPSS HIGH threshold.
+* **Manual Approval** – Any CRITICAL/HIGH CVE that is at least 30 days old, in KEV, or has EPSS risk `HIGH` or `CRITICAL`.
 * All steps produce **artifacts** (reports, SBOM, provenance) and write a **Job Summary** for immediate visibility.
+
+### EPSS Cheat Sheet
+
+EPSS is the estimated probability that a CVE will be exploited in the next 30 days. For example, an EPSS score of `2.1%` falls into the `HIGH` risk band in this repository and forces manual review when the CVE is also `CRITICAL` or `HIGH`.
+
+| EPSS Score Range | Risk Level | Meaning | Action |
+|-------|--------|---------|--------|
+| `< 0.5%` | Low | Exploitation is currently unlikely at internet scale. | Normal patching cadence; does not block auto-promotion by itself. |
+| `0.5% to < 2.0%` | Medium | Elevated likelihood, but not yet a strong exploitation signal. | Prioritize patching soon; still auto-eligible if age and KEV checks are clear. |
+| `2.0% to < 10.0%` | High | Material probability of exploitation in the next 30 days. | Manual review required for CRITICAL/HIGH CVEs. |
+| `>= 10.0%` | Critical | Very high exploitation likelihood. | Treat as urgent; manual approval only for CRITICAL/HIGH CVEs. |
 
 ---
 
@@ -78,7 +90,7 @@ flowchart TD
 │
 ├── .github/workflows/
 │   ├── ci.yml               # Pre‑merge: IaC & secret scan + CIS compliance (blocks on findings)
-│   ├── image‑promotion.yml  # Vendor image ingestion, scanning, attestation, promotion
+│   ├── image‑promotion.yml  # Vendor image ingestion, EPSS/KEV/age gating, attestation, promotion
 │   └── rescan.yml           # Weekly re‑scan of promoted release SBOMs
 │
 └── iac/n8n/
@@ -95,13 +107,13 @@ flowchart TD
 ### 📦 Promotion Runbook
 1. **Actions → Image Promotion (Trusted Source) → Run workflow**
 2. Provide a version (e.g. `1.55.3`) or leave blank for auto‑resolve.
-3. Pipeline runs: policy → cosign → digest → Trivy → KEV → gate.
-4. **If clean** – Auto‑promoted, GitHub Release created with digest & rollback info.
-5. **If vulnerable** – Workflow pauses; reviewer downloads `scan-report-<version>` artifact, reviews `trivy‑summary.txt` and `vendor‑sig‑check.txt`, then approves or rejects in the `trusted‑promotion` environment.
+3. Pipeline runs: policy → cosign → digest → Trivy → KEV/EPSS/age enrichment → gate.
+4. **If auto‑eligible** – Auto‑promoted, GitHub Release created with digest & rollback info.
+5. **If manual review is required** – Workflow pauses; reviewer downloads `scan-report-<version>` artifact, reviews `trivy‑summary.txt` and `vendor‑sig‑check.txt`, then approves or rejects in the `trusted‑promotion` environment.
 
 ### ⚖️ Exception / Waiver Process
 1. Download the scan artifact as evidence.
-2. Document accepted risk (CVE IDs, severity, KEV status, business justification) in the release notes.
+2. Document accepted risk (CVE IDs, severity, CVE age, KEV status, EPSS score, business justification) in the release notes.
 3. Set a **review deadline** – date by which a patched version must be deployed or the exception renewed.
 4. Update `policy/vulnerability‑gate‑policy.yml` comments to reflect the new waiver.
 
@@ -121,6 +133,7 @@ Alternatively, re‑run `install.sh` and supply the target version when prompted
 |---------|--------|
 | Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans the SBOM of all promoted releases; opens a GitHub Issue on new findings |
 | New CVE in CISA KEV list | Issue opened automatically on next scan – treat as P1 |
+| Existing CVE crosses EPSS HIGH threshold | Issue opened automatically on next scan – re-evaluate exception immediately |
 | New vendor release | Run promotion pipeline manually; or let **auto‑upgrade** handle deployment (see below) |
 | Daily 03:00 (optional) | `upgrade.sh` checks for new releases, upgrades, verifies health, rolls back on failure |
 
@@ -131,7 +144,7 @@ Alternatively, re‑run `install.sh` and supply the target version when prompted
 - **SLSA provenance**: Every promoted image is signed with `actions/attest-build-provenance` (SLSA Level 3).
 - **SBOM**: Generated via Syft and attested to the registry.
 - **CIS hardening**: Enforced by `runtime‑hardening‑policy.yml` (Section 5 controls).
-- **Vulnerability gating**: Trivy + CISA KEV; critical/high findings block promotion.
+- **Vulnerability gating**: Trivy + CISA KEV + FIRST EPSS + CVE age. Fresh CRITICAL/HIGH findings can auto-promote only when KEV is clear and EPSS stays below HIGH.
 - **Approval workflow**: `trusted‑promotion` environment for manual risk acceptance.
 - **Policy changes**: Require a reviewed pull request.
 
@@ -142,6 +155,7 @@ Alternatively, re‑run `install.sh` and supply the target version when prompted
 - **CIS Docker Benchmark v1.6.0** – https://www.cisecurity.org/benchmark/docker
 - **NIST SP 800‑53 Rev 5** – https://csrc.nist.gov/publications/sp800-53/rev-5
 - **CISA Known Exploited Vulnerabilities (KEV)** – https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+- **FIRST EPSS** – https://www.first.org/epss/
 
 ---
 

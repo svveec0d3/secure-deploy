@@ -157,7 +157,7 @@ jobs:
           # Scan ALL severities so KEV can cross-reference Medium/Low CVEs too
           trivy image \
             --format json \
-            --output trivy-report.json \
+            --output trivy-report.raw.json \
             --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
             n8nio/n8n:${{ env.N8N_VERSION }}
 
@@ -168,22 +168,6 @@ jobs:
             --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
             n8nio/n8n:${{ env.N8N_VERSION }} || true
 
-          # Human-readable summary
-          echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
-          echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
-          echo "" >> trivy-summary.txt
-          echo "#### CRITICAL & HIGH CVEs" >> trivy-summary.txt
-          jq -r 'if .Results then
-            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity=="CRITICAL" or .Severity=="HIGH") |
-            "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
-          else "None." end' trivy-report.json >> trivy-summary.txt
-          echo "" >> trivy-summary.txt
-          echo "#### MEDIUM & LOW CVEs" >> trivy-summary.txt
-          jq -r 'if .Results then
-            .Results[] | select(.Vulnerabilities != null) | .Vulnerabilities[] | select(.Severity=="MEDIUM" or .Severity=="LOW") |
-            "- \(.VulnerabilityID) (\(.Severity)): \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "None")"
-          else "None." end' trivy-report.json >> trivy-summary.txt
-
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always()
@@ -193,33 +177,63 @@ jobs:
           ref: refs/heads/n8n-${{ env.N8N_VERSION }}
           sha: ${{ steps.fetch-digest.outputs.version_branch_sha }}
 
-      - name: Check CISA KEV (Known Exploited Vulnerabilities)
-        id: kev-check
+      - name: Enrich findings with KEV, EPSS, and age
+        id: enrich-findings
         run: |
           curl -s -o kev.json https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+          python3 .github/scripts/enrich_findings.py trivy-report.raw.json kev.json trivy-report.json
+
+          echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
+          echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
+          echo "" >> trivy-summary.txt
+          echo "#### Manual Review Findings (Critical/High with age, KEV, or EPSS trigger)" >> trivy-summary.txt
+          jq -r '[
+            .Results[]?.Vulnerabilities[]?
+            | select((.Severity=="CRITICAL" or .Severity=="HIGH") and .GateDecision=="MANUAL_REVIEW")
+            | "- \(.VulnerabilityID) (\(.Severity)) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk)) reasons=\((.GateReasons | join(",")))"
+          ] | if length > 0 then .[] else "None." end' trivy-report.json >> trivy-summary.txt
+
+          echo "" >> trivy-summary.txt
+          echo "---" >> trivy-summary.txt
+          echo "### Auto-Eligible Critical/High Findings" >> trivy-summary.txt
+          jq -r '[
+            .Results[]?.Vulnerabilities[]?
+            | select((.Severity=="CRITICAL" or .Severity=="HIGH") and .GateDecision=="AUTO_ALLOWED")
+            | "- \(.VulnerabilityID) (\(.Severity)) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk))"
+          ] | if length > 0 then .[] else "None." end' trivy-report.json >> trivy-summary.txt
 
           echo "" >> trivy-summary.txt
           echo "---" >> trivy-summary.txt
           echo "### CISA KEV Check — Actively Exploited CVEs" >> trivy-summary.txt
 
-          # Cross-reference ALL CVE IDs (any severity) against KEV
-          VULNS=$(jq -r '[.Results[]?.Vulnerabilities[]?.VulnerabilityID] | unique | .[]' trivy-report.json 2>/dev/null || echo "")
-          KEV_IDS=$(jq -r '.vulnerabilities[].cveID' kev.json)
           KEV_HIT=false
+          jq -r '[
+            .Results[]?.Vulnerabilities[]?
+            | select(.KevHit == true)
+            | "- \(.VulnerabilityID) (\(.Severity)) EPSS=\(.EpssPercent)% (\(.EpssRisk))"
+          ] | if length > 0 then .[] else empty end' trivy-report.json >> trivy-summary.txt
 
-          for CVE in $VULNS; do
-            if echo "$KEV_IDS" | grep -q "$CVE"; then
-              SEVERITY=$(jq -r ".Results[]?.Vulnerabilities[]? | select(.VulnerabilityID==\"$CVE\") | .Severity" trivy-report.json | head -1)
-              ENTRY=$(jq -r ".vulnerabilities[] | select(.cveID==\"$CVE\") | \"- $CVE ($SEVERITY — KEV) | \(.vendorProject) \(.product): \(.shortDescription)\"" kev.json)
-              echo "$ENTRY" >> trivy-summary.txt
-              KEV_HIT=true
-            fi
-          done
-
-          if [ "$KEV_HIT" = false ]; then
+          if jq -e '[.Results[]?.Vulnerabilities[]? | select(.KevHit == true)] | length > 0' trivy-report.json > /dev/null; then
+            KEV_HIT=true
+          else
             echo "✅ No CVEs match the CISA KEV catalogue." >> trivy-summary.txt
           fi
 
+          MANUAL_REVIEW_COUNT=$(jq -r '.AnalysisSummary.manual_review_count // 0' trivy-report.json)
+          AUTO_ELIGIBLE_COUNT=$(jq -r '.AnalysisSummary.auto_allowed_critical_high_count // 0' trivy-report.json)
+          CRIT_HIGH_COUNT=$(jq -r '.AnalysisSummary.critical_high_count // 0' trivy-report.json)
+          AGE_REVIEW_COUNT=$(jq -r '.AnalysisSummary.older_than_30_days_count // 0' trivy-report.json)
+          EPSS_REVIEW_COUNT=$(jq -r '.AnalysisSummary.epss_high_or_critical_count // 0' trivy-report.json)
+          KEV_REVIEW_COUNT=$(jq -r '.AnalysisSummary.kev_critical_high_count // 0' trivy-report.json)
+          UNKNOWN_AGE_REVIEW_COUNT=$(jq -r '.AnalysisSummary.unknown_age_critical_high_count // 0' trivy-report.json)
+
+          echo "manual_review_count=$MANUAL_REVIEW_COUNT" >> $GITHUB_OUTPUT
+          echo "auto_eligible_count=$AUTO_ELIGIBLE_COUNT" >> $GITHUB_OUTPUT
+          echo "critical_high_count=$CRIT_HIGH_COUNT" >> $GITHUB_OUTPUT
+          echo "age_review_count=$AGE_REVIEW_COUNT" >> $GITHUB_OUTPUT
+          echo "epss_review_count=$EPSS_REVIEW_COUNT" >> $GITHUB_OUTPUT
+          echo "kev_review_count=$KEV_REVIEW_COUNT" >> $GITHUB_OUTPUT
+          echo "unknown_age_review_count=$UNKNOWN_AGE_REVIEW_COUNT" >> $GITHUB_OUTPUT
           echo "kev_hit=$KEV_HIT" >> $GITHUB_OUTPUT
           cat trivy-summary.txt
 
@@ -246,23 +260,23 @@ jobs:
             vendor-sig-check.txt
             kev.json
 
-      - name: Gate — Require approval if CRITICAL/HIGH or KEV hit
+      - name: Gate — Require approval only for aged, KEV, or high-EPSS critical/high CVEs
         id: trivy-scan
         run: |
-          # Check 1: any CRITICAL or HIGH CVEs?
-          HAS_CRIT_HIGH=false
-          if ! trivy image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed n8nio/n8n:${{ env.N8N_VERSION }}; then
-            HAS_CRIT_HIGH=true
-          fi
+          MANUAL_REVIEW_COUNT="${{ steps.enrich-findings.outputs.manual_review_count }}"
+          CRIT_HIGH_COUNT="${{ steps.enrich-findings.outputs.critical_high_count }}"
+          AUTO_ELIGIBLE_COUNT="${{ steps.enrich-findings.outputs.auto_eligible_count }}"
+          KEV_HIT="${{ steps.enrich-findings.outputs.kev_hit }}"
+          KEV_REVIEW_COUNT="${{ steps.enrich-findings.outputs.kev_review_count }}"
+          AGE_REVIEW_COUNT="${{ steps.enrich-findings.outputs.age_review_count }}"
+          EPSS_REVIEW_COUNT="${{ steps.enrich-findings.outputs.epss_review_count }}"
+          UNKNOWN_AGE_REVIEW_COUNT="${{ steps.enrich-findings.outputs.unknown_age_review_count }}"
 
-          # Check 2: any CVE (any severity) matched the KEV catalogue?
-          KEV_HIT="${{ steps.kev-check.outputs.kev_hit }}"
-
-          if [ "$HAS_CRIT_HIGH" = true ] || [ "$KEV_HIT" = true ]; then
-            echo "⚠️ Approval required: HAS_CRIT_HIGH=$HAS_CRIT_HIGH  KEV_HIT=$KEV_HIT"
+          if [ "$MANUAL_REVIEW_COUNT" -gt 0 ]; then
+            echo "⚠️ Approval required: manual_review_count=$MANUAL_REVIEW_COUNT crit_high_count=$CRIT_HIGH_COUNT kev_hit=$KEV_HIT kev_review_count=$KEV_REVIEW_COUNT age_review_count=$AGE_REVIEW_COUNT epss_review_count=$EPSS_REVIEW_COUNT unknown_age_review_count=$UNKNOWN_AGE_REVIEW_COUNT"
             echo "is_vulnerable=true" >> $GITHUB_OUTPUT
           else
-            echo "✅ Clean: no CRITICAL/HIGH CVEs and no KEV matches. Auto-promotion enabled."
+            echo "✅ Auto-promotion enabled: crit_high_count=$CRIT_HIGH_COUNT auto_eligible_count=$AUTO_ELIGIBLE_COUNT kev_hit=$KEV_HIT"
             echo "is_vulnerable=false" >> $GITHUB_OUTPUT
           fi
           exit 0
@@ -272,8 +286,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          CRIT_HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' trivy-report.json 2>/dev/null || echo 0)
-          KEV_HIT="${{ steps.kev-check.outputs.kev_hit }}"
+          CRIT_HIGH="${{ steps.enrich-findings.outputs.critical_high_count }}"
+          MANUAL_REVIEW_COUNT="${{ steps.enrich-findings.outputs.manual_review_count }}"
+          KEV_REVIEW_COUNT="${{ steps.enrich-findings.outputs.kev_review_count }}"
+          AGE_REVIEW_COUNT="${{ steps.enrich-findings.outputs.age_review_count }}"
+          EPSS_REVIEW_COUNT="${{ steps.enrich-findings.outputs.epss_review_count }}"
+          UNKNOWN_AGE_REVIEW_COUNT="${{ steps.enrich-findings.outputs.unknown_age_review_count }}"
           VERSION="${{ env.N8N_VERSION }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh label create security --color "FF0000" --force || true
@@ -284,18 +302,22 @@ jobs:
 
           **Image:** n8n ${VERSION}
           - **CRITICAL/HIGH CVEs:** ${CRIT_HIGH}
-          - **CISA KEV Match:** ${KEV_HIT}
+          - **Findings requiring manual review:** ${MANUAL_REVIEW_COUNT}
+          - **CISA KEV-triggered CRITICAL/HIGH findings:** ${KEV_REVIEW_COUNT}
+          - **Age >= 30 days:** ${AGE_REVIEW_COUNT}
+          - **EPSS risk HIGH/CRITICAL:** ${EPSS_REVIEW_COUNT}
+          - **Unknown published age:** ${UNKNOWN_AGE_REVIEW_COUNT}
 
           👉 [View Full Vulnerability Report (Workflow Run)](${RUN_URL})
 
-          **Action required:** Click the link above to review the scan details and approve/deny promotion in the **trusted-promotion** environment gate.
+          **Action required:** Review the EPSS, KEV, and age-based findings in the scan artifact, then approve or deny promotion in the **trusted-promotion** environment gate.
 
           ---
           *Triggered by Image Promotion on $(date -u '+%Y-%m-%d')*
           ISSUE_EOF
           gh issue create \
             --repo "${{ github.repository }}" \
-            --title "🚨 n8n $VERSION: CRITICAL/HIGH CVEs or KEV detected — approval required" \
+            --title "🚨 n8n $VERSION: manual review required by age/KEV/EPSS gate" \
             --body-file issue_body.md \
             --label "security"
 
@@ -395,7 +417,7 @@ jobs:
             ### Source
             - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
             - GHCR digest: `${{ steps.docker_push.outputs.digest }}`
-            - Trivy Scan: ✅ No CRITICAL/HIGH CVEs found, no CISA KEV matches
+            - Trivy Gate: ✅ Auto-promotion eligible under CVE age, KEV, and EPSS policy
             - Full report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Rollback
@@ -485,7 +507,7 @@ jobs:
           body: |
             ## ⚠️ n8n ${{ needs.scan-images.outputs.resolved_version }} — Manually Approved
 
-            This version was promoted **with known CRITICAL/HIGH CVEs or CISA KEV matches** after manual review.
+            This version was promoted **after manual review under the CVE age, KEV, and EPSS policy**.
             Full scan report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Image Reference (Digest-Pinned)
