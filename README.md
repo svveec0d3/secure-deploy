@@ -45,6 +45,93 @@ This repository currently does the following:
 - re-scans only the latest promoted release on a schedule
 - retains only the latest 3 promoted GitHub releases
 
+## Why n8n
+
+`n8n` is a useful reference workload because it represents a modern application with a non-trivial dependency tree and a realistic containerized runtime. That makes it a good example for:
+
+- noisy CVE output from layered dependencies
+- a real need for enrichment beyond severity alone
+- runtime reachability experiments against a practical application process
+
+The repo is not specific to `n8n` as a concept. `n8n` is simply a credible example for demonstrating the promotion pattern.
+
+## Quick Start
+
+To deploy the latest promoted image to a host:
+
+```bash
+git clone https://github.com/svveec0d3/secure-deploy.git
+cd secure-deploy/iac/n8n
+chmod +x install.sh
+./install.sh
+```
+
+To run promotion manually:
+
+1. Open `Actions`
+2. Select `Image Promotion (Trusted Source)`
+3. Choose a version or leave the default if you want the workflow to resolve the latest supported release
+
+## Workflow Snapshot
+
+```mermaid
+flowchart LR
+    subgraph Intake["Intake"]
+        A["Manual dispatch or weekly version check"]
+        B["Allowlist + semver policy"]
+        C["Resolve exact vendor digest"]
+    end
+
+    subgraph Analysis["Analysis"]
+        D["Trivy scan"]
+        E["Tracee smoke run"]
+        F["KEV + EPSS + CVE age enrichment"]
+    end
+
+    subgraph Decision["Decision"]
+        G{"Approval gate"}
+        H["Auto promotion"]
+        I["Manual approval"]
+    end
+
+    subgraph Publish["Publish"]
+        J["Push trusted image to GHCR"]
+        K["Attest provenance and SBOM"]
+        L["Create GitHub Release"]
+        M["Keep latest 3 releases"]
+    end
+
+    subgraph Monitor["Monitor"]
+        N["Weekly re-scan of latest promoted release"]
+    end
+
+    A --> B --> C --> D
+    C --> E
+    D --> F
+    E --> F
+    F --> G
+    G -->|Auto-eligible| H --> J
+    G -->|Manual review required| I --> J
+    J --> K --> L --> M --> N
+```
+
+## Threat Model
+
+The pipeline exists because vendor-image ingestion has some common and repeatable attack paths.
+
+The table below shows the main CI/CD threat patterns this repo is trying to reduce.
+
+| Threat pattern | Why it matters in vendor ingestion | Example reference | Primary control in this repo |
+| :--- | :--- | :--- | :--- |
+| Mutable or substituted artifacts | A tag can move or be replaced without the operator realizing it | OWASP CI/CD risk themes around artifact integrity and dependency abuse | digest pinning and semver-only policy |
+| Dependency chain abuse | A trusted upstream can still carry risky dependencies or vulnerable packages | OWASP CI/CD dependency chain abuse | Trivy plus KEV, EPSS, and CVE age enrichment |
+| Weak approval flow | High-risk findings can be promoted too easily if the workflow has no pause point | OWASP CI/CD flow control mechanisms | `trusted-promotion` manual approval gate |
+| Weak identity and trust boundaries | Long-lived credentials or ambiguous builder identity weaken the pipeline | NIST 800-53 and NIST 800-204D control intent | ephemeral `GITHUB_TOKEN` for GHCR, `id-token: write` for attestation flows |
+| Low auditability | Teams need to know what was promoted, when, and under what risk posture | NIST 800-53 audit and integrity control mindset | GitHub Releases, artifacts, summaries, attestations |
+| Runtime over-privilege | Even a reviewed image can do too much damage if the container is too permissive | CIS Docker Benchmark and least-privilege practice | hardened compose settings in `iac/n8n` |
+
+This is why the narrative for this repo is not simply "scan and deploy." It is "treat vendor ingestion as a supply chain and CI/CD threat surface."
+
 ## Operating Context
 
 ### What
@@ -131,6 +218,15 @@ For `CRITICAL` and `HIGH` findings:
 
 `MEDIUM`, `LOW`, and `UNKNOWN` findings are still reported, but they do not currently trigger manual approval on their own.
 
+The intended interpretation is:
+
+- `KEV` is the urgency signal
+  - if a `CRITICAL` or `HIGH` finding is in KEV, it goes straight to human review
+- `EPSS` is the probability signal
+  - it helps decide whether a not-yet-KEV finding still deserves manual review
+- `CVE age` is the tolerance-window signal
+  - it prevents a "temporary exception" from quietly becoming a long-lived exposure
+
 ## EPSS Policy
 
 EPSS is the FIRST Exploit Prediction Scoring System. It estimates the probability that a CVE will be exploited in the next 30 days.
@@ -150,6 +246,19 @@ The table below is repository policy, not an official EPSS standard.
 
 Tracee reachability data is collected and shown in vulnerability summaries as `Reachability = Yes/No`.
 
+Why it matters:
+
+- traditional image scanning tells you vulnerable code is present
+- reachability tries to answer whether vulnerable code was actually exercised during the smoke run
+
+That matters because one of the biggest practical problems in vulnerability management is false-positive prioritization. A package can be vulnerable on disk without being materially exercised by the workload path you care about. Reachability analysis is an attempt to move from:
+
+- "vulnerable package exists"
+
+to:
+
+- "vulnerable package exists and related files were observed during execution"
+
 Current status:
 
 - reachability is useful analyst context
@@ -159,49 +268,6 @@ TODO:
 
 - verify that the current Tracee-based reachability approach is reliable enough across the supported image and runtime combinations
 - until that verification is complete, keep reachability out of the approval gate
-
-## Workflow
-
-```mermaid
-flowchart LR
-    subgraph Intake["Intake"]
-        A["Manual dispatch or weekly version check"]
-        B["Allowlist + semver policy"]
-        C["Resolve exact vendor digest"]
-    end
-
-    subgraph Analysis["Analysis"]
-        D["Trivy scan"]
-        E["Tracee smoke run"]
-        F["KEV + EPSS + CVE age enrichment"]
-    end
-
-    subgraph Decision["Decision"]
-        G{"Approval gate"}
-        H["Auto promotion"]
-        I["Manual approval"]
-    end
-
-    subgraph Publish["Publish"]
-        J["Push trusted image to GHCR"]
-        K["Attest provenance and SBOM"]
-        L["Create GitHub Release"]
-        M["Keep latest 3 releases"]
-    end
-
-    subgraph Monitor["Monitor"]
-        N["Weekly re-scan of latest promoted release"]
-    end
-
-    A --> B --> C --> D
-    C --> E
-    D --> F
-    E --> F
-    F --> G
-    G -->|Auto-eligible| H --> J
-    G -->|Manual review required| I --> J
-    J --> K --> L --> M --> N
-```
 
 ### Workflow Roles
 
@@ -222,6 +288,24 @@ flowchart LR
 
 - `ci.yml`
   - validates repository security checks and helper logic
+
+## Identity, Trust, and Attestation
+
+This repository avoids long-lived registry credentials in the promotion path.
+
+Current identity model:
+
+- GHCR authentication uses the repository-scoped ephemeral `GITHUB_TOKEN`
+- artifact attestation flows use GitHub Actions `id-token: write`
+- the promotion workflow therefore relies on short-lived workflow identity rather than a stored long-lived registry password or PAT for the publish path
+
+Attestation model:
+
+- build provenance is generated in GitHub Actions
+- SBOM attestation is generated in GitHub Actions
+- the promoted artifact path therefore treats GitHub Actions as the controlled promotion system for the trusted image release flow
+
+This is a stronger model than storing static registry credentials, but it should still be described as the current repository design, not as a universal zero-trust guarantee.
 
 ## Framework Mapping
 
@@ -368,6 +452,20 @@ This means Docker hardening does not raise SLSA maturity by itself. Instead, it 
   - no action if it remains acceptable under the current gate policy
   - issue creation if it now requires manual review
 
+### Remediation Workflow
+
+When `rescan.yml` opens an issue, the recommended operating response is:
+
+1. triage whether the issue was triggered by KEV, EPSS, CVE age, or a combination
+2. decide whether a newer upstream release should be promoted
+3. if no acceptable newer version exists, document the exception and risk owner
+4. update deployment plans so the latest promoted image is revisited promptly
+
+Suggested response expectation:
+
+- KEV-triggered `CRITICAL` or `HIGH` findings should be treated as immediate human-review items
+- EPSS or age-triggered findings should be reviewed on an accelerated patching timeline, even if not yet known exploited
+
 ### Release Retention
 
 - keep the latest 3 promoted GitHub releases
@@ -392,6 +490,18 @@ chmod +x install.sh
 - runtime resource limits
 - deployment and rollback support
 - optional auto-upgrade with `upgrade.sh`
+
+## Artifact Format and Forward Path
+
+Current artifact choices:
+
+- SBOM format: `SPDX JSON`
+- provenance: GitHub artifact attestation / build provenance flow
+
+Forward-looking gap:
+
+- `VEX` is not emitted today
+- adding VEX in the future would be a logical next step if the project wants to move from "list vulnerabilities" toward "state exploitability and affectedness more explicitly"
 
 ## References
 
