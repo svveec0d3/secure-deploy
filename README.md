@@ -4,7 +4,9 @@
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 [![Re-Scan](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml)
 
-Secure Deploy is a practical reference implementation for promoting third-party container images through a more controlled, evidence-driven pipeline. Instead of trusting an upstream tag and stopping at a CVE list, this repository demonstrates how to combine supply chain integrity, risk-based vulnerability enrichment, and runtime hardening in one GitHub Actions workflow.
+Secure Deploy is a practical reference implementation for promoting third-party container images through a more controlled, evidence-driven pipeline. Where many pipelines stop at "scan the image and count the CVEs," this repository demonstrates how to add supply chain integrity, exploitability context, and runtime hardening to the promotion path itself.
+
+Put differently: this repo is trying to show what vendor image promotion looks like when the goal is not only "ship the image," but "ship the image with enough evidence to justify trust."
 
 The current example workload is `n8nio/n8n`, chosen because it is a realistic application with a meaningful dependency tree and enough package noise to make severity-only decisions unhelpful.
 
@@ -25,7 +27,14 @@ This repository is best read as a practical implementation aligned with parts of
 
 ## The Problem: Why Scans Alone Are Not Enough
 
-Vendor-image promotion pipelines often fail in predictable ways:
+Vendor-image promotion pipelines often fail in predictable ways. A raw scan result by itself usually leaves you with the wrong questions answered:
+
+- you know the image has vulnerabilities, but not whether they are likely to be exploited soon
+- you know the package exists, but not whether the relevant files were exercised
+- you know the vendor published a tag, but not whether you should trust that tag as an immutable release input
+- you know the image was acceptable last week, but not whether it is still acceptable today
+
+In practice, that leads to:
 
 - `Tag drift`
   - a mutable upstream tag can change silently
@@ -38,7 +47,7 @@ Vendor-image promotion pipelines often fail in predictable ways:
 - `day-2 drift`
   - an image that looked acceptable during promotion can become riskier later as KEV and EPSS data change
 
-This repository exists to address those problems directly.
+This repository exists to address those problems more directly by treating vendor image promotion as a trust and decision problem, not only as a scanning problem.
 
 ## Pipeline Architecture
 
