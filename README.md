@@ -8,7 +8,24 @@ Secure Deploy is a reference repository for securely ingesting, reviewing, promo
 
 The central idea is simple: do not trust a vendor image tag just because it exists. Resolve the exact digest, evaluate its risk, decide whether it is auto-eligible or needs human approval, then publish a trusted image with release evidence and rollback information.
 
-## Executive Summary
+## Industry Framing
+
+When teams talk about CI/CD security and supply chain security, the same four references come up repeatedly, but they do different jobs.
+
+Think of them this way:
+
+- `OWASP Top 10 CI/CD Security Risks` tells you what the major CI/CD threats are.
+  The "Why".
+- `NIST SP 800-53` gives you a control vocabulary for how organizations mitigate those threats.
+  The "What".
+- `SLSA` gives you a supply chain integrity model for build and artifact trust.
+  The "How" for build integrity.
+- `NIST SP 800-204D` explains how software supply chain controls fit into a DevSecOps CI/CD architecture.
+  The "How" for the pipeline design.
+
+This repository should be read as a practical demonstration of some of those ideas, not as a full implementation of any one framework.
+
+## What This Repository Demonstrates
 
 This repository currently does the following:
 
@@ -222,6 +239,12 @@ Why this is the closest fit:
 - provenance is generated in a controlled GitHub Actions path
 - promoted artifacts are tied to immutable digests
 - attestation and release evidence are preserved for verification and audit use
+
+In short:
+- OWASP helps explain the threat model
+- NIST SP 800-53 helps explain the control mindset
+- SLSA helps explain artifact integrity and provenance
+- this repository uses those ideas to demonstrate a promotion path that is closer to SLSA Level 3 concepts than to lower-maturity ad hoc promotion
 
 ### NIST SP 800-53
 
