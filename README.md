@@ -1,213 +1,261 @@
-# 🔐 Secure Deploy – Enterprise Vendor Image Ingestion Pipeline
+# Secure Deploy
 
 [![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
+[![Re-Scan](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml)
 
-A reference implementation that shows **how to securely ingest, verify and deploy vendor‑supplied container images** (demoed with [n8n](https://n8n.io)). It bundles industry‑grade best practices – **SLSA**, **CIS Docker Benchmark v1.6.0**, and **NIST SP 800‑53** – into a GitHub‑Actions CI/CD pipeline.
+Secure Deploy is a reference pipeline for securely ingesting, reviewing, promoting, and deploying vendor container images. This repository uses `n8nio/n8n` as the working example, but the pattern is meant to show how to combine policy, attestation, vulnerability context, and operational controls into a practical GitHub Actions workflow.
 
----
+The pipeline is built around a simple principle: do not treat a container tag as trustworthy just because it exists. Resolve the exact digest, scan it, enrich the findings with additional risk signals, decide whether the image is auto-eligible or needs human approval, then publish a promoted image with an auditable release record.
 
-## 1️⃣ Threat Model & Risk Impact
+## What This Repository Does
 
-| Threat | Description | Risk / Impact |
-|-------|-------------|---------------|
-| **Mutable tags** | Use of `:latest` or other mutable tags lets the image change silently. | Supply‑chain compromise, hidden back‑doors. |
-| **Unknown provenance** | No cryptographic proof the image originates from the vendor. | Tampering, malicious inserts. |
-| **Missing audit trail** | No immutable record of which version was deployed, who approved it, and when. | Forensic gaps, regulatory non‑compliance. |
-| **Delayed CVE exposure** | Images become vulnerable as new CVEs are disclosed after promotion. | Production breach risk, patch‑lag. |
-| **Runtime escape** | Container can break out of its isolation and affect the host. | Privilege escalation, data exfiltration. |
-| **Insufficient documentation** | Operators lack clear guidance on remediation and rollback. | Operational error, prolonged downtime. |
+- Pulls vendor images only from an allowlisted source.
+- Resolves and pins the immutable image digest before promotion.
+- Scans the image with Trivy and enriches findings with KEV, EPSS, and CVE age.
+- Captures Tracee runtime reachability data during a smoke run and reports it in vulnerability summaries.
+- Uses an approval gate only when `CRITICAL` or `HIGH` findings meet this repository's manual-review criteria.
+- Attests promoted images and publishes GitHub Releases with rollback details.
+- Re-scans only the latest promoted release on a schedule.
+- Keeps only the latest 3 promoted GitHub releases.
 
----
+## Why This Exists
 
-## 2️⃣ Controls Mapping & Mitigation (with SLSA Level)
+Typical operational risks for vendor container images:
 
-| Threat | Control | Implementation Detail | Mitigation | SLSA Maturity |
-|-------|--------|----------------------|------------|----------------|
-| Mutable tags | **Digest pinning** | Resolve SHA‑256 digest at ingestion; runtime uses `image@sha256:<digest>` | Guarantees immutable image content. | **Level 3** – Provenance attestation & reproducible builds |
-| Unknown provenance | **SLSA Provenance attestation** | `actions/attest-build-provenance` attaches signed provenance to each promoted image. | Cryptographic proof of origin. | **Level 3** |
-| Unknown provenance | **Cosign signature verification** | Verify vendor‑signed OCI signatures before promotion. | Detects unsigned or tampered images. | **Level 2** |
-| Unknown provenance | **Source allowlist** | `policy/image‑ingestion‑policy.yml` restricts to `n8nio/n8n` with strict `x.y.z` semver. | Blocks unexpected sources. | **Level 2** |
-| Missing audit trail | **SBOM generation** | Syft creates SPDX SBOM; stored as artifact and attested. | Full component inventory for compliance. | **Level 2** |
-| Missing audit trail | **Versioned GitHub Releases** | Each promotion creates a release with digest, SBOM, and provenance links. | Immutable record of deployment. | **Level 3** |
-| Delayed CVE exposure | **Trivy CVE scan** | Scans all severities and enriches each CVE with age, KEV, EPSS, and runtime reachability context. | Early detection with exploitability context. | **Level 2** |
-| Delayed CVE exposure | **Tracee runtime reachability** | Observes executed binaries and loaded files during a smoke run to flag whether vulnerable packages are exercised. | Distinguishes dormant package CVEs from runtime-touched package CVEs. | **Level 2** |
-| Delayed CVE exposure | **CISA KEV cross‑reference** | Automated check against known‑exploited CVE list. | Blocks actively exploited CRITICAL/HIGH vulnerabilities. | **Level 2** |
-| Delayed CVE exposure | **FIRST EPSS enrichment** | Pulls EPSS for every discovered CVE and classifies exploitation likelihood. | Separates fresh low-probability findings from urgent exploitation risk. | **Level 2** |
-| Runtime escape | **CIS Docker Benchmark v1.6.0 (Section 5)** | Enforced via `policy/runtime‑hardening‑policy.yml` – read‑only FS, `no‑new‑privileges`, `cap_drop: ALL`, AppArmor, non‑root user, resource limits, custom network. | Reduces blast radius, enforces least privilege. | **Level 2** |
-| Operational gaps | **Approval gate** | `trusted‑promotion` environment requires manual review for flagged images. | Human risk acceptance decision. | **Level 2** |
-| Operational gaps | **Weekly re‑scan** | `rescan.yml` re‑scans only the latest promoted release; opens issue on new findings. | Continuous compliance monitoring on the active release. | **Level 2** |
-| Operational gaps | **Host verification script** | `install.sh` runs `gh attestation verify` against exact digest before deployment. | Guarantees host runs the exact promoted image. | **Level 3** |
+| Risk | Why it matters | Control in this repo |
+| :--- | :--- | :--- |
+| Mutable tags | `latest` can change silently. | Digest pinning and semver-only tag policy |
+| Weak provenance | You may not know who really produced the image. | Allowlist, cosign verification when available, attestations |
+| Incomplete review | Severity alone does not reflect exploitability. | KEV, EPSS, and CVE age enrichment |
+| Delayed exposure | An already-promoted image can become riskier later. | Scheduled re-scan of the latest promoted release |
+| Weak audit trail | Teams need to know what was approved and why. | GitHub Releases, artifacts, job summaries |
+| Unsafe runtime defaults | A good image can still run with bad container settings. | CIS-oriented runtime hardening in `iac/n8n` |
 
-**SLSA Maturity**: This repository demonstrates **SLSA Level 3**. By generating signed provenance attestations for every promoted image, pinning digests, and publishing reproducible SBOMs, it meets the requirements for automated provenance verification and reproducible builds, which are the hallmarks of Level 3.
+## Approval Gate Logic
 
----
+The promotion gate is intentionally risk-based, not severity-only.
 
-## 3️⃣ Pipeline Architecture
+### What Is a CVE?
+
+`CVE` stands for Common Vulnerabilities and Exposures. A CVE identifier such as `CVE-2026-12345` is a public reference for a known security flaw. By itself, a CVE tells you that a vulnerability exists, but it does not fully answer:
+
+- whether the flaw is being actively exploited
+- how likely exploitation is in the near term
+- whether the vulnerable code path is actually exercised in your workload
+- whether the issue is new and still inside a short patching window, or old and lingering
+
+That is why this repository does not gate promotion on CVE severity alone.
+
+### Why Additional Risk Signals Are Used
+
+The approval gate combines several parameters because each one answers a different risk question.
+
+| Signal | Question it answers | Why it matters for approval |
+| :--- | :--- | :--- |
+| CVSS / severity from Trivy | How bad could the flaw be if exploited? | Provides base prioritization |
+| KEV | Is this CVE already known to be exploited in the wild? | Strong real-world urgency signal |
+| EPSS | How likely is exploitation in the next 30 days? | Helps separate theoretical from likely exploitation |
+| CVE age | Has the issue remained open long enough that it should no longer be treated as a fresh exception? | Prevents indefinite deferral |
+| Reachability | Did the smoke run observe runtime evidence tied to the vulnerable package files? | Useful context, but not trusted enough yet for gating |
+
+### Current Gate Policy
+
+For `CRITICAL` and `HIGH` findings:
+
+- Auto-promotion is allowed when the CVE is under 30 days old, not in KEV, and below this repository's manual-review EPSS threshold.
+- Manual approval is required when the CVE is at least 30 days old, in KEV, or falls into this repository's `HIGH` or `CRITICAL` EPSS policy band.
+
+`MEDIUM`, `LOW`, and `UNKNOWN` findings are still recorded and reported, but they do not directly trigger manual approval in the current policy.
+
+## EPSS Policy Cheat Sheet
+
+EPSS is the FIRST Exploit Prediction Scoring System. It estimates the probability that a CVE will be exploited in the next 30 days.
+
+Example: an EPSS score of `2.1%` means an estimated `2.1%` probability of exploitation in the next 30 days. In this repository, that is above the `2.0%` manual-review threshold for `CRITICAL` and `HIGH` findings.
+
+The table below is repository policy, not an official EPSS standard.
+
+| EPSS score | Repository policy band | Meaning | Action |
+| :--- | :--- | :--- | :--- |
+| `< 0.5%` | Low | Exploitation currently looks unlikely at scale. | Does not block auto-promotion by itself |
+| `0.5% to < 2.0%` | Medium | Elevated likelihood, but below manual-review threshold. | Review normally; may still auto-promote |
+| `2.0% to < 10.0%` | High | Above this repository's manual-review threshold. | Manual review for `CRITICAL` and `HIGH` findings |
+| `>= 10.0%` | Critical | Very high predicted exploitation likelihood. | Treat as urgent; manual review for `CRITICAL` and `HIGH` findings |
+
+## Reachability Status
+
+Tracee reachability data is collected and shown in the vulnerability summaries as `Reachability = Yes/No`.
+
+Current position:
+
+- Reachability is useful analyst context.
+- Reachability is not currently used as an approval-gate parameter.
+
+TODO:
+- Verify that the current Tracee reachability method is reliable enough for policy decisions across the supported image/runtime combinations.
+- Until that verification is complete, keep reachability out of the approval gate.
+
+## Pipeline Flow
 
 ```mermaid
-flowchart TD
-    A[Developer / Scheduler] -->|workflow_dispatch| B[Scan Job]
-    B --> C{Policy Checks}
-    C -->|allowlist & semver| D[Cosign Verify]
-    D --> E[Digest Resolve]
-    E --> F[Trivy Scan]
-    F --> G[Tracee Reachability]
-    G --> H[KEV + EPSS + Age Enrichment]
-    H --> I{Gate Decision}
-    I -->|No findings or fresh low-risk critical/high| J[Auto‑Promote]
-    I -->|Aged / KEV / high-EPSS critical/high| K["Manual Approval (trusted‑promotion)"]
-    J --> L[Attest Provenance & SBOM]
-    K --> L
-    L --> M[GitHub Release + Rollback Info]
-    M -.->|SBOM used for| N{Weekly Re-scan}
+flowchart LR
+    subgraph Intake["Intake"]
+        A["Manual dispatch or weekly version check"]
+        B["Allowlist + semver policy"]
+        C["Resolve exact vendor digest"]
+    end
+
+    subgraph Analysis["Analysis"]
+        D["Trivy image scan"]
+        E["Tracee smoke run"]
+        F["KEV + EPSS + CVE age enrichment"]
+    end
+
+    subgraph Decision["Decision"]
+        G{"Approval gate"}
+        H["Auto promotion"]
+        I["Manual approval in trusted-promotion"]
+    end
+
+    subgraph Publish["Publish and monitor"]
+        J["Push trusted image to GHCR"]
+        K["Attest provenance and SBOM"]
+        L["Create GitHub Release with rollback data"]
+        M["Prune releases to latest 3"]
+        N["Weekly re-scan of latest promoted release"]
+    end
+
+    A --> B --> C --> D
+    C --> E
+    D --> F
+    E --> F
+    F --> G
+    G -->|Auto-eligible| H --> J
+    G -->|Manual review required| I --> J
+    J --> K --> L --> M --> N
 ```
 
-* **Auto‑Promote** – No findings, or only CRITICAL/HIGH CVEs that are under 30 days old, not in KEV, and below this repository's EPSS manual-review threshold.
-* **Manual Approval** – Any CRITICAL/HIGH CVE that is at least 30 days old, in KEV, or crosses this repository's EPSS manual-review threshold.
-* Vulnerability tables now include a **Reachability** column based on Tracee runtime evidence from the smoke test.
-* All steps produce **artifacts** (reports, SBOM, provenance, Tracee reachability logs) and write a **Job Summary** for immediate visibility.
+### Workflow Summary
 
-### EPSS Policy Cheat Sheet
+- `weekly-version-check.yml`
+  - Checks whether a newer upstream `n8n` version exists.
+  - Triggers promotion only when upstream is newer than the latest promoted release.
 
-EPSS is the estimated probability that a CVE will be exploited in the next 30 days. The percentage itself comes from FIRST EPSS. The labels below are not an official EPSS standard; they are repository-defined policy bands used only for promotion decisions in this project.
+- `image-promotion.yml`
+  - Pulls the selected upstream image.
+  - Pins by digest.
+  - Scans and enriches vulnerabilities.
+  - Decides between auto-promotion and manual approval.
+  - Publishes the trusted image and release record.
+  - Prunes old releases, keeping the latest 3.
 
-For example, an EPSS score of `2.1%` means a modeled `2.1%` probability of exploitation within 30 days. In this repository, that score falls above the `2.0%` manual-review threshold, so a `CRITICAL` or `HIGH` CVE with that score requires manual approval.
+- `rescan.yml`
+  - Re-scans only the latest promoted release.
+  - Opens an issue if the latest promoted release now requires manual review under the current policy.
 
-| EPSS Score Range | Repository Policy Band | Meaning | Action |
-|-------|--------|---------|--------|
-| `< 0.5%` | Low | Exploitation is currently unlikely at internet scale. | Normal patching cadence; does not block auto-promotion by itself. |
-| `0.5% to < 2.0%` | Medium | Elevated likelihood, but below this repository's manual-review threshold. | Prioritize patching soon; still auto-eligible if age and KEV checks are clear. |
-| `2.0% to < 10.0%` | High | Above this repository's manual-review threshold. | Manual review required for CRITICAL/HIGH CVEs. |
-| `>= 10.0%` | Critical | Very high exploitation likelihood. | Treat as urgent; manual approval only for CRITICAL/HIGH CVEs. |
+- `ci.yml`
+  - Validates repository security checks and the Tracee integration path.
 
----
+## Repository Structure
 
-## 4️⃣ Repository Structure
-
-```
+```text
 .
-├── policy/
-│   ├── image‑ingestion‑policy.yml      # Allowlist, tag pattern, vendor signature mode
-│   ├── vulnerability‑gate‑policy.yml   # CVE/KEV block rules, exception process, re‑scan policy
-│   ├── runtime‑hardening‑policy.yml    # CIS Docker Benchmark v1.6.0 compliance table (Section 5)
-│   └── cis‑docker‑hardening.md         # Human‑readable reference for all CIS checks performed
-│
 ├── .github/workflows/
-│   ├── ci.yml               # Pre‑merge: IaC & secret scan + CIS compliance (blocks on findings)
-│   ├── image‑promotion.yml  # Vendor image ingestion, EPSS/KEV/age gating, attestation, promotion
-│   └── rescan.yml           # Weekly re‑scan of the latest promoted release
-│
+│   ├── ci.yml
+│   ├── image-promotion.yml
+│   ├── rescan.yml
+│   └── weekly-version-check.yml
+├── .github/scripts/
+│   ├── enrich_findings.py
+│   ├── generate_summary.py
+│   ├── merge_tracee_reachability.py
+│   ├── collect_package_files.sh
+│   └── run_tracee_reachability.sh
+├── policy/
+│   ├── image-ingestion-policy.yml
+│   ├── runtime-hardening-policy.yml
+│   └── vulnerability-gate-policy.yml
 └── iac/n8n/
-    ├── docker-compose.yml   # CIS‑hardened stack (read‑only FS, non‑root, AppArmor, limits)
-    ├── .env.template        # Template – copy to .env and populate
-    ├── install.sh           # Interactive setup: version, resource limits, provenance verify, deploy, auto‑upgrade
-    └── upgrade.sh           # Auto‑upgrade: checks latest release, upgrades, health‑checks, rolls back on failure
+    ├── docker-compose.yml
+    ├── install.sh
+    ├── upgrade.sh
+    └── .env.template
 ```
 
----
+## Operating Model
 
-## 5️⃣ Operational Playbooks
+### Promotion
 
-### 📦 Promotion Runbook
-1. **Actions → Image Promotion (Trusted Source) → Run workflow**
-2. Provide a version (e.g. `1.55.3`) or leave blank for auto‑resolve.
-3. Pipeline runs: policy → cosign → digest → Trivy → Tracee reachability smoke test → KEV/EPSS/age enrichment → gate.
-4. **If auto‑eligible** – Auto‑promoted, GitHub Release created with digest & rollback info.
-5. **If manual review is required** – Workflow pauses; reviewer downloads `scan-report-<version>` artifact, reviews `trivy‑summary.txt` and `vendor‑sig‑check.txt`, then approves or rejects in the `trusted‑promotion` environment.
+1. Run `Image Promotion (Trusted Source)` manually, or let the weekly version check dispatch it when a newer upstream version exists.
+2. The workflow resolves the exact digest and scans the image.
+3. Findings are enriched with KEV, EPSS, CVE age, and reachability context.
+4. The workflow either:
+   - auto-promotes, or
+   - pauses for review in the `trusted-promotion` environment.
+5. On success, the trusted image is pushed to GHCR, attested, released, and old releases are pruned down to the newest 3.
 
-### ⚖️ Exception / Waiver Process
-1. Download the scan artifact as evidence.
-2. Document accepted risk (CVE IDs, severity, CVE age, KEV status, EPSS score, business justification) in the release notes.
-3. Set a **review deadline** – date by which a patched version must be deployed or the exception renewed.
-4. Update `policy/vulnerability‑gate‑policy.yml` comments to reflect the new waiver.
+### Re-Scan
 
-### 🔄 Rollback Procedure
+- Schedule: every Monday at `00:00 UTC`
+- Scope: latest promoted release only
+- Outcome:
+  - no action if still acceptable under current policy
+  - GitHub issue if the latest promoted release now requires manual review
 
-`install.sh` automatically prints a ready‑to‑run rollback command at the end of each deployment:
+### Release Retention
+
+- Keep the latest 3 promoted GitHub releases.
+- Intended retention model:
+  - latest active release
+  - previous release
+  - one extra rollback candidate
+
+## Security Controls Summary
+
+| Control | Purpose |
+| :--- | :--- |
+| Source allowlist | Restrict ingestion to expected vendor image source |
+| Semver-only tags | Block moving targets such as mutable tags |
+| Digest pinning | Ensure the scanned image is the promoted image |
+| Trivy scanning | Discover package vulnerabilities across severities |
+| KEV enrichment | Flag actively exploited CVEs |
+| EPSS enrichment | Add near-term exploitation probability |
+| CVE age tracking | Distinguish fresh issues from stale exposure |
+| Tracee reachability reporting | Provide runtime context for analyst review |
+| SBOM attestation | Preserve software inventory and downstream evidence |
+| Provenance attestation | Provide origin and build integrity evidence |
+| GitHub Releases | Preserve rollback details and approval history |
+
+## One-Time GitHub Setup
+
+1. Create the `trusted-promotion` environment and add required reviewers.
+2. Set Actions workflow permissions to `Read and write`.
+3. Ensure the `n8n-trusted` package visibility matches your intended deployment model.
+
+## Deploying to a Host
+
 ```bash
-# Printed by install.sh after every successful deploy:
-sed -i 's|^N8N_IMAGE_IDENTIFIER=.*|N8N_IMAGE_IDENTIFIER=@sha256:<prev>|' .env && docker compose up -d
-```
-Simply copy and run the printed command. The previous `N8N_IMAGE_IDENTIFIER` (digest or tag) is captured automatically before it is overwritten.
-
-Alternatively, re‑run `install.sh` and supply the target version when prompted. `upgrade.sh` also performs an automatic rollback if the upgraded container fails its health check.
-
-### ⏱️ Re‑Scan & Patch Cadence
-| Trigger | Action |
-|---------|--------|
-| Weekly (Mon 00:00 UTC) | `rescan.yml` re‑scans only the latest promoted release; opens a GitHub Issue on new findings |
-
-Release retention:
-- Keep only the latest 3 GitHub releases: the newest release plus the prior 2 versions.
-| New CVE in CISA KEV list | Issue opened automatically on next scan – treat as P1 |
-| Existing CVE crosses EPSS HIGH threshold | Issue opened automatically on next scan – re-evaluate exception immediately |
-| New vendor release | Run promotion pipeline manually; or let **auto‑upgrade** handle deployment (see below) |
-| Daily 03:00 (optional) | `upgrade.sh` checks for new releases, upgrades, verifies health, rolls back on failure |
-
----
-
-## 6️⃣ Security Policy (High‑Level)
-- **Image source**: Must be `ghcr.io/svveec0d3/secure-deploy/*`; never pull directly from Docker Hub in production.
-- **SLSA provenance**: Every promoted image is signed with `actions/attest-build-provenance` (SLSA Level 3).
-- **SBOM**: Generated via Syft and attested to the registry.
-- **CIS hardening**: Enforced by `runtime‑hardening‑policy.yml` (Section 5 controls).
-- **Vulnerability gating**: Trivy + CISA KEV + FIRST EPSS + CVE age. Fresh CRITICAL/HIGH findings can auto-promote only when KEV is clear and EPSS stays below HIGH.
-- **Approval workflow**: `trusted‑promotion` environment for manual risk acceptance.
-- **Policy changes**: Require a reviewed pull request.
-
----
-
-## 7️⃣ References & Best‑Practice Guides
-- **SLSA** – https://slsa.dev/spec/v1.0
-- **CIS Docker Benchmark v1.6.0** – https://www.cisecurity.org/benchmark/docker
-- **NIST SP 800‑53 Rev 5** – https://csrc.nist.gov/publications/sp800-53/rev-5
-- **CISA Known Exploited Vulnerabilities (KEV)** – https://www.cisa.gov/known-exploited-vulnerabilities-catalog
-- **FIRST EPSS** – https://www.first.org/epss/
-
----
-
-## 8️⃣ One‑Time GitHub Setup
-1. **Settings → Environments → New environment** → name `trusted‑promotion`; enable required reviewers.
-2. **Settings → Actions → General → Workflow permissions** → **Read and write permissions**.
-3. **Packages → `n8n‑trusted` → Settings → Change visibility → Public** (required for OCI attestation).
-
----
-
-## 9️⃣ Deploying to a Host
-```bash
-# Clone the repository on the VM
 git clone https://github.com/svveec0d3/secure-deploy.git
 cd secure-deploy/iac/n8n
-
-# Install GitHub CLI (recommended for provenance verification)
-# https://github.com/cli/cli#installation
-gh auth login
-
-# Run the interactive installer
 chmod +x install.sh
 ./install.sh
 ```
-`install.sh` prompts for:
-- **Host IP** – auto‑detected, confirm or override
-- **Version** – explicit semver or auto‑resolve latest from GitHub Releases
-- **Resource limits** – memory, CPU, PID caps (CIS hardening)
-- **GHCR digest** – fetched automatically from the release body; the bare hex hash is accepted and `sha256:` is prepended automatically
-- **Provenance verification** – `gh attestation verify` against SLSA attestation
-- **Auto‑upgrade** – optionally registers a daily cron job (`upgrade.sh`) that checks for new releases, upgrades, health‑checks the container, and **auto‑rolls back** if it fails
 
-**Automation mode** (CI / no prompts): `./install.sh --skip-verify`
+`install.sh` supports:
 
-### 🔁 Manual Upgrade
-```bash
-./upgrade.sh          # upgrade if a newer version is available
-./upgrade.sh --force  # upgrade regardless of current version
-```
-Upgrade log is written to `upgrade.log` in the same directory.
+- selecting a target version or latest promoted release
+- provenance verification with `gh attestation verify`
+- runtime resource limits
+- deployment and rollback support
+- optional auto-upgrade via `upgrade.sh`
 
----
+## References
 
-*This README is version‑controlled; any changes to policies or controls must be reviewed via pull request to maintain auditability.*
+- [SLSA v1.0](https://slsa.dev/spec/v1.0)
+- [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
+- [NIST SP 800-53 Rev. 5](https://csrc.nist.gov/publications/sp800-53/rev-5)
+- [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+- [FIRST EPSS](https://www.first.org/epss/)
 
-[![CI](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/ci.yml)
-[![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
+This README is policy-adjacent documentation. If the workflow behavior changes, keep this file aligned with the actual workflow logic.
