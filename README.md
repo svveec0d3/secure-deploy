@@ -8,6 +8,26 @@ Secure Deploy is a reference pipeline for securely ingesting, reviewing, promoti
 
 The pipeline is built around a simple principle: do not treat a container tag as trustworthy just because it exists. Resolve the exact digest, scan it, enrich the findings with additional risk signals, decide whether the image is auto-eligible or needs human approval, then publish a promoted image with an auditable release record.
 
+## Framework Lens
+
+This repository is easiest to understand if you look at it through four lenses:
+
+- `SLSA`
+  - Focus: software supply chain integrity and provenance
+  - Use here: digest pinning, provenance attestation, SBOM attestation, release traceability
+
+- `NIST SP 800-53`
+  - Focus: baseline security and privacy controls for systems and organizations
+  - Use here: access control, configuration management, auditability, integrity checks, incident visibility, least privilege
+
+- `NIST SP 800-204D`
+  - Focus: integrating software supply chain security into DevSecOps CI/CD pipelines
+  - Use here: pipeline-native controls for artifacts, provenance, attestation, SBOMs, and policy-driven promotion
+
+- `OWASP Top 10 CI/CD Security Risks`
+  - Focus: the most common and damaging CI/CD-specific failure modes
+  - Use here: protecting the workflow itself from bad flow control, weak IAM, dependency abuse, artifact trust failures, and poor visibility
+
 ## What This Repository Does
 
 - Pulls vendor images only from an allowlisted source.
@@ -96,6 +116,69 @@ TODO:
 - Verify that the current Tracee reachability method is reliable enough for policy decisions across the supported image/runtime combinations.
 - Until that verification is complete, keep reachability out of the approval gate.
 
+## 5W1H View
+
+### What
+
+This repository is a secure image-ingestion and promotion pipeline for vendor containers.
+
+It does four main things:
+
+- validates what image is being pulled
+- evaluates the image with risk-enrichment signals
+- decides whether the image is auto-eligible or needs manual approval
+- publishes a traceable, deployable trusted image
+
+### Why
+
+Container image promotion is not only a vulnerability-scanning problem.
+
+You need to answer at least four questions:
+
+- Is this really the image we intended to trust?
+- Is the vulnerability picture only severe, or also likely to be exploited?
+- Do we have enough evidence to justify auto-promotion versus human approval?
+- Can we later prove what was approved and roll back safely?
+
+That is why this repository combines SLSA, NIST control thinking, NIST CI/CD supply-chain guidance, and OWASP CI/CD risk guidance instead of relying on a single scanner result.
+
+### Who
+
+This setup is useful for:
+
+- platform or DevSecOps engineers who own the promotion path
+- security reviewers who approve exceptions
+- operators who deploy the promoted image to hosts
+- auditors or incident responders who need release evidence and rollback history
+
+### When
+
+- `image-promotion.yml` runs when a version is submitted manually or dispatched by the weekly version checker
+- `weekly-version-check.yml` runs on schedule to detect a newer upstream version
+- `rescan.yml` runs weekly to reassess only the latest promoted release
+- `ci.yml` runs on repository changes to validate the workflow and helper logic
+
+### Where
+
+Controls are applied in multiple places:
+
+- source policy in `policy/`
+- promotion and re-scan orchestration in `.github/workflows/`
+- enrichment and summarization logic in `.github/scripts/`
+- runtime hardening and deployment controls in `iac/n8n/`
+
+### How
+
+The pipeline works by layering controls rather than trusting one control to do everything:
+
+- source and tag restrictions reduce ingestion risk
+- digest pinning locks the exact artifact under review
+- Trivy detects vulnerabilities
+- KEV, EPSS, and CVE age refine approval decisions
+- Tracee adds runtime context for analysts
+- attestations and releases preserve provenance and auditability
+- CIS-style Docker hardening reduces runtime blast radius after deployment
+
 ## Pipeline Flow
 
 ```mermaid
@@ -135,6 +218,119 @@ flowchart LR
     G -->|Manual review required| I --> J
     J --> K --> L --> M --> N
 ```
+
+## Framework Mapping
+
+### SLSA
+
+What it is:
+- SLSA is a supply-chain security framework focused on proving software origin and reducing tampering risk in the build and release path.
+
+Why it matters here:
+- This repository is fundamentally about trusting promoted artifacts, not just scanning them.
+
+How this repo uses it:
+- immutable digest pinning before promotion
+- build provenance attestation for promoted images
+- SBOM attestation
+- release-level evidence for rollback and auditability
+
+Current maturity call:
+- This repository is closest to `SLSA Level 3` for the promoted artifact path.
+
+Why `Level 3` is a reasonable claim here:
+- provenance is generated and attached during the GitHub Actions-controlled promotion path
+- the promoted image is tied to an immutable digest
+- attestation and release evidence are preserved
+
+What keeps this from being a claim beyond that:
+- this repo does not attempt to claim the highest SLSA posture across every upstream dependency or every surrounding operational component
+- the vendor signature verification path is opportunistic because upstream signing availability is outside this repository's control
+
+### NIST SP 800-53
+
+What it is:
+- NIST SP 800-53 is a catalog of security and privacy controls used to build and assess security programs.
+
+Why it matters here:
+- It gives a control-oriented way to explain why this repo has approval gates, logging artifacts, policy checks, integrity verification, and runtime restrictions.
+
+How this repo reflects it:
+- access control: manual approval in `trusted-promotion`
+- configuration management: policy-as-code and semver constraints
+- audit and accountability: workflow artifacts, releases, summaries
+- system and information integrity: digest pinning, attestation, scanning, KEV/EPSS enrichment
+- least privilege and hardening: Docker runtime constraints in `iac/n8n`
+
+How to think about it:
+- NIST SP 800-53 is the broad control backbone
+- this repo is not an implementation of the whole catalog
+- it is a targeted implementation of a useful subset for image promotion and deployment
+
+### NIST SP 800-204D
+
+What it is:
+- NIST SP 800-204D is guidance on integrating software supply chain security into DevSecOps CI/CD pipelines, especially for cloud-native delivery.
+
+Why it matters here:
+- This document is unusually close to what this repo is trying to do operationally: secure the CI/CD path itself, its artifacts, and the trust decisions around promotion.
+
+How this repo reflects it:
+- policy-driven CI/CD workflow
+- artifact-centric decisions around digests, SBOMs, provenance, and releases
+- supply-chain evidence preserved as part of the promotion pipeline
+- re-scan logic that revisits trust decisions after promotion
+
+Why it is a strong fit:
+- if SLSA explains the supply-chain integrity maturity model
+- then `NIST SP 800-204D` explains how to embed those kinds of controls into an actual DevSecOps pipeline
+
+### OWASP Top 10 CI/CD Security Risks
+
+What it is:
+- OWASP Top 10 CI/CD Security Risks is a threat-focused list of the most important CI/CD-specific risks.
+
+Why it matters here:
+- It is useful for pressure-testing the pipeline itself, not just the image being promoted.
+
+How this repo maps to it:
+- flow control mechanisms: approval gate and workflow separation
+- identity and access management: GitHub environment approval and workflow permissions
+- dependency chain abuse: upstream source allowlist and artifact review path
+- insecure system configuration: runtime hardening and workflow policy checks
+- artifact integrity validation: digest pinning, attestation, release evidence
+- logging and visibility: workflow summaries, artifacts, releases, re-scan output
+
+Practical value:
+- OWASP tells you what can go wrong in CI/CD operations
+- this repo shows a concrete subset of controls that reduce several of those risks
+
+## Docker Hardening and Why It Matters
+
+Docker hardening is not the same thing as supply-chain integrity, but it is part of the total risk picture.
+
+How it contributes:
+
+- SLSA and attestation help answer: "Can I trust what artifact I am deploying?"
+- KEV, EPSS, and CVE age help answer: "How risky is it to promote this image?"
+- Docker hardening helps answer: "If the image or workload is compromised, how much damage can the container do?"
+
+That is why the runtime-hardening controls still matter even after image promotion succeeds.
+
+In this repo, Docker hardening supports the overall security posture by:
+
+- reducing privileges with `cap_drop: ALL`
+- limiting privilege escalation with `no-new-privileges`
+- using a read-only root filesystem where possible
+- preferring non-root execution
+- constraining CPU and memory
+- applying AppArmor and related runtime controls
+
+In other words:
+
+- SLSA helps secure the artifact trust chain
+- the approval gate helps secure the promotion decision
+- Docker hardening helps contain runtime impact after deployment
 
 ### Workflow Summary
 
@@ -255,7 +451,9 @@ chmod +x install.sh
 - [SLSA v1.0](https://slsa.dev/spec/v1.0)
 - [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
 - [NIST SP 800-53 Rev. 5](https://csrc.nist.gov/publications/sp800-53/rev-5)
+- [NIST SP 800-204D](https://csrc.nist.gov/pubs/sp/800/204/d/final)
 - [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
 - [FIRST EPSS](https://www.first.org/epss/)
+- [OWASP Top 10 CI/CD Security Risks](https://owasp.org/www-project-top-10-ci-cd-security-risks/)
 
 This README is policy-adjacent documentation. If the workflow behavior changes, keep this file aligned with the actual workflow logic.
