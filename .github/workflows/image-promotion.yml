@@ -168,6 +168,19 @@ jobs:
             --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
             n8nio/n8n:${{ env.N8N_VERSION }} || true
 
+      - name: Run Tracee reachability smoke test
+        run: |
+          chmod +x .github/scripts/collect_package_files.sh .github/scripts/run_tracee_reachability.sh
+          mkdir -p tracee-output
+          .github/scripts/collect_package_files.sh "n8nio/n8n:${{ env.N8N_VERSION }}" trivy-report.raw.json tracee-output/package-files.tsv
+          .github/scripts/run_tracee_reachability.sh "n8nio/n8n:${{ env.N8N_VERSION }}" "$PWD/tracee-output" "tracee-smoke-${{ github.run_id }}" 15678
+          python3 .github/scripts/merge_tracee_reachability.py \
+            trivy-report.raw.json \
+            tracee-output/package-files.tsv \
+            tracee-output/tracee-events.jsonl \
+            "$(cat tracee-output/target-container-id.txt)" \
+            trivy-report.tracee.json
+
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
         if: always()
@@ -181,7 +194,7 @@ jobs:
         id: enrich-findings
         run: |
           curl -s -o kev.json https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
-          python3 .github/scripts/enrich_findings.py trivy-report.raw.json kev.json trivy-report.json
+          python3 .github/scripts/enrich_findings.py trivy-report.tracee.json kev.json trivy-report.json
 
           echo "### Vulnerability Scan — n8nio/n8n:${{ env.N8N_VERSION }}" > trivy-summary.txt
           echo "Pinned digest: ${{ steps.fetch-digest.outputs.digest }}" >> trivy-summary.txt
@@ -190,7 +203,7 @@ jobs:
           jq -r '[
             .Results[]?.Vulnerabilities[]?
             | select((.Severity=="CRITICAL" or .Severity=="HIGH") and .GateDecision=="MANUAL_REVIEW")
-            | "- \(.VulnerabilityID) (\(.Severity)) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk)) reasons=\((.GateReasons | join(",")))"
+            | "- \(.VulnerabilityID) (\(.Severity)) reachability=\(.Reachability) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk)) reasons=\((.GateReasons | join(",")))"
           ] | if length > 0 then .[] else "None." end' trivy-report.json >> trivy-summary.txt
 
           echo "" >> trivy-summary.txt
@@ -199,7 +212,7 @@ jobs:
           jq -r '[
             .Results[]?.Vulnerabilities[]?
             | select((.Severity=="CRITICAL" or .Severity=="HIGH") and .GateDecision=="AUTO_ALLOWED")
-            | "- \(.VulnerabilityID) (\(.Severity)) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk))"
+            | "- \(.VulnerabilityID) (\(.Severity)) reachability=\(.Reachability) age=\((if .AgeDays == null then "unknown" else ((.AgeDays | tostring) + "d") end)) KEV=\(.KevHit) EPSS=\(.EpssPercent)% (\(.EpssRisk))"
           ] | if length > 0 then .[] else "None." end' trivy-report.json >> trivy-summary.txt
 
           echo "" >> trivy-summary.txt
@@ -259,6 +272,7 @@ jobs:
             trivy-summary.txt
             vendor-sig-check.txt
             kev.json
+            tracee-output/
 
       - name: Gate — Require approval only for aged, KEV, or high-EPSS critical/high CVEs
         id: trivy-scan
@@ -417,7 +431,7 @@ jobs:
             ### Source
             - Upstream: `n8nio/n8n@${{ needs.scan-images.outputs.image_digest }}`
             - GHCR digest: `${{ steps.docker_push.outputs.digest }}`
-            - Trivy Gate: ✅ Auto-promotion eligible under CVE age, KEV, and EPSS policy
+            - Trivy/Tracee Gate: ✅ Auto-promotion eligible under CVE age, KEV, EPSS, and runtime reachability reporting
             - Full report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Rollback
@@ -507,7 +521,7 @@ jobs:
           body: |
             ## ⚠️ n8n ${{ needs.scan-images.outputs.resolved_version }} — Manually Approved
 
-            This version was promoted **after manual review under the CVE age, KEV, and EPSS policy**.
+            This version was promoted **after manual review under the CVE age, KEV, EPSS, and runtime reachability policy**.
             Full scan report: [`scan-report-${{ needs.scan-images.outputs.resolved_version }}`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ### Image Reference (Digest-Pinned)

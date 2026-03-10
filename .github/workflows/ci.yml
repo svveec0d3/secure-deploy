@@ -83,6 +83,66 @@ jobs:
           echo "   Fix all findings in the source files and push again."
           exit 1
 
+  tracee-reachability-test:
+    name: Tracee Reachability Integration Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release jq curl
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+
+      - name: Run end-to-end Trivy + Tracee test
+        run: |
+          chmod +x .github/scripts/collect_package_files.sh .github/scripts/run_tracee_reachability.sh
+
+          docker pull n8nio/n8n:latest
+
+          trivy image \
+            --format json \
+            --output trivy-report.raw.json \
+            --severity CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN \
+            n8nio/n8n:latest
+
+          .github/scripts/collect_package_files.sh n8nio/n8n:latest trivy-report.raw.json package-files.tsv
+          .github/scripts/run_tracee_reachability.sh n8nio/n8n:latest "$PWD/tracee-output" tracee-ci-smoke 15678
+          python3 .github/scripts/merge_tracee_reachability.py \
+            trivy-report.raw.json \
+            package-files.tsv \
+            tracee-output/tracee-events.jsonl \
+            "$(cat tracee-output/target-container-id.txt)" \
+            trivy-report.tracee.json
+
+          curl -s -o kev.json https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+          python3 .github/scripts/enrich_findings.py trivy-report.tracee.json kev.json trivy-report.enriched.json
+          python3 .github/scripts/generate_summary.py trivy-report.enriched.json kev.json ci-tracee-test
+
+          jq -e '.ReachabilitySummary.matched_event_count > 0' trivy-report.tracee.json > /dev/null
+          jq -e '[.Results[]?.Vulnerabilities[]? | has("Reachable")] | all' trivy-report.enriched.json > /dev/null
+          jq -e '[.Results[]?.Vulnerabilities[]? | .Reachability] | any(. == "Yes" or . == "No")' trivy-report.enriched.json > /dev/null
+          grep -q "Reachability" "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Tracee integration artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracee-reachability-integration
+          path: |
+            trivy-report.raw.json
+            trivy-report.tracee.json
+            trivy-report.enriched.json
+            package-files.tsv
+            kev.json
+            tracee-output/
+
   cis-compliance-check:
     name: CIS Docker Benchmark v1.6.0 Compliance Check
     runs-on: ubuntu-latest

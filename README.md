@@ -30,7 +30,8 @@ A reference implementation that shows **how to securely ingest, verify and deplo
 | Unknown provenance | **Source allowlist** | `policy/image‑ingestion‑policy.yml` restricts to `n8nio/n8n` with strict `x.y.z` semver. | Blocks unexpected sources. | **Level 2** |
 | Missing audit trail | **SBOM generation** | Syft creates SPDX SBOM; stored as artifact and attested. | Full component inventory for compliance. | **Level 2** |
 | Missing audit trail | **Versioned GitHub Releases** | Each promotion creates a release with digest, SBOM, and provenance links. | Immutable record of deployment. | **Level 3** |
-| Delayed CVE exposure | **Trivy CVE scan** | Scans all severities and enriches each CVE with age, KEV, and EPSS context. | Early detection with exploitability context. | **Level 2** |
+| Delayed CVE exposure | **Trivy CVE scan** | Scans all severities and enriches each CVE with age, KEV, EPSS, and runtime reachability context. | Early detection with exploitability context. | **Level 2** |
+| Delayed CVE exposure | **Tracee runtime reachability** | Observes executed binaries and loaded files during a smoke run to flag whether vulnerable packages are exercised. | Distinguishes dormant package CVEs from runtime-touched package CVEs. | **Level 2** |
 | Delayed CVE exposure | **CISA KEV cross‑reference** | Automated check against known‑exploited CVE list. | Blocks actively exploited CRITICAL/HIGH vulnerabilities. | **Level 2** |
 | Delayed CVE exposure | **FIRST EPSS enrichment** | Pulls EPSS for every discovered CVE and classifies exploitation likelihood. | Separates fresh low-probability findings from urgent exploitation risk. | **Level 2** |
 | Runtime escape | **CIS Docker Benchmark v1.6.0 (Section 5)** | Enforced via `policy/runtime‑hardening‑policy.yml` – read‑only FS, `no‑new‑privileges`, `cap_drop: ALL`, AppArmor, non‑root user, resource limits, custom network. | Reduces blast radius, enforces least privilege. | **Level 2** |
@@ -51,19 +52,21 @@ flowchart TD
     C -->|allowlist & semver| D[Cosign Verify]
     D --> E[Digest Resolve]
     E --> F[Trivy Scan]
-    F --> G[KEV + EPSS + Age Enrichment]
-    G --> H{Gate Decision}
-    H -->|No findings or fresh low-risk critical/high| I[Auto‑Promote]
-    H -->|Aged / KEV / high-EPSS critical/high| J["Manual Approval (trusted‑promotion)"]
-    I --> K[Attest Provenance & SBOM]
-    J --> K
-    K --> L[GitHub Release + Rollback Info]
-    L -.->|SBOM used for| M{Weekly Re-scan}
+    F --> G[Tracee Reachability]
+    G --> H[KEV + EPSS + Age Enrichment]
+    H --> I{Gate Decision}
+    I -->|No findings or fresh low-risk critical/high| J[Auto‑Promote]
+    I -->|Aged / KEV / high-EPSS critical/high| K["Manual Approval (trusted‑promotion)"]
+    J --> L[Attest Provenance & SBOM]
+    K --> L
+    L --> M[GitHub Release + Rollback Info]
+    M -.->|SBOM used for| N{Weekly Re-scan}
 ```
 
 * **Auto‑Promote** – No findings, or only CRITICAL/HIGH CVEs that are under 30 days old, not in KEV, and below this repository's EPSS manual-review threshold.
 * **Manual Approval** – Any CRITICAL/HIGH CVE that is at least 30 days old, in KEV, or crosses this repository's EPSS manual-review threshold.
-* All steps produce **artifacts** (reports, SBOM, provenance) and write a **Job Summary** for immediate visibility.
+* Vulnerability tables now include a **Reachability** column based on Tracee runtime evidence from the smoke test.
+* All steps produce **artifacts** (reports, SBOM, provenance, Tracee reachability logs) and write a **Job Summary** for immediate visibility.
 
 ### EPSS Policy Cheat Sheet
 
@@ -109,7 +112,7 @@ For example, an EPSS score of `2.1%` means a modeled `2.1%` probability of explo
 ### 📦 Promotion Runbook
 1. **Actions → Image Promotion (Trusted Source) → Run workflow**
 2. Provide a version (e.g. `1.55.3`) or leave blank for auto‑resolve.
-3. Pipeline runs: policy → cosign → digest → Trivy → KEV/EPSS/age enrichment → gate.
+3. Pipeline runs: policy → cosign → digest → Trivy → Tracee reachability smoke test → KEV/EPSS/age enrichment → gate.
 4. **If auto‑eligible** – Auto‑promoted, GitHub Release created with digest & rollback info.
 5. **If manual review is required** – Workflow pauses; reviewer downloads `scan-report-<version>` artifact, reviews `trivy‑summary.txt` and `vendor‑sig‑check.txt`, then approves or rejects in the `trusted‑promotion` environment.
 

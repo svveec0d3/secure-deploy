@@ -8,6 +8,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -37,6 +38,20 @@ def parse_date(raw: str):
 def fetch_epss_scores(cve_ids):
     scores = {}
     if not cve_ids:
+        return scores
+
+    fixture_path = os.environ.get("EPSS_DATA_FILE")
+    if fixture_path:
+        with open(fixture_path) as f:
+            payload = json.load(f)
+        for item in payload.get("data", []):
+            cve = item.get("cve")
+            try:
+                score = float(item.get("epss", 0.0))
+            except (TypeError, ValueError):
+                score = 0.0
+            if cve:
+                scores[cve] = score
         return scores
 
     unique_ids = sorted(set(cve_ids))

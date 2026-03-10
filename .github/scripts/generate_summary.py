@@ -109,8 +109,8 @@ def main():
     lines.append("")
 
     if vulns:
-        lines.append("| CVE | Severity | Published | Age | Package | Version | Fixed In | KEV | EPSS | EPSS Risk | Gate |")
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        lines.append("| CVE | Severity | Published | Age | Package | Version | Fixed In | Reachability | KEV | EPSS | EPSS Risk | Gate |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for v in vulns:
             cve_id = v.get("VulnerabilityID", "")
             severity = v.get("Severity", "")
@@ -120,12 +120,13 @@ def main():
             pkg = v.get("PkgName", "")
             installed = v.get("InstalledVersion", "")
             fixed = v.get("FixedVersion") or "None"
+            reachable = "Yes" if v.get("Reachable") else "No"
             kev = "\u2705 Yes" if v.get("KevHit") or cve_id in kev_ids else "No"
             epss = fmt_epss(v.get("EpssPercent"))
             epss_risk = v.get("EpssRisk", "-")
             gate = v.get("GateDecision", "AUTO_ALLOWED")
             lines.append(
-                f"| {cve_id} | {emoji} {severity} | {pub_date} | {age} | {pkg} | {installed} | {fixed} | {kev} | {epss} | {epss_risk} | {gate} |"
+                f"| {cve_id} | {emoji} {severity} | {pub_date} | {age} | {pkg} | {installed} | {fixed} | {reachable} | {kev} | {epss} | {epss_risk} | {gate} |"
             )
 
     lines.append("")
