@@ -61,19 +61,21 @@ flowchart TD
     L -.->|SBOM used for| M{Weekly Re-scan}
 ```
 
-* **Auto‑Promote** – No findings, or only CRITICAL/HIGH CVEs that are under 30 days old, not in KEV, and below the EPSS HIGH threshold.
-* **Manual Approval** – Any CRITICAL/HIGH CVE that is at least 30 days old, in KEV, or has EPSS risk `HIGH` or `CRITICAL`.
+* **Auto‑Promote** – No findings, or only CRITICAL/HIGH CVEs that are under 30 days old, not in KEV, and below this repository's EPSS manual-review threshold.
+* **Manual Approval** – Any CRITICAL/HIGH CVE that is at least 30 days old, in KEV, or crosses this repository's EPSS manual-review threshold.
 * All steps produce **artifacts** (reports, SBOM, provenance) and write a **Job Summary** for immediate visibility.
 
-### EPSS Cheat Sheet
+### EPSS Policy Cheat Sheet
 
-EPSS is the estimated probability that a CVE will be exploited in the next 30 days. For example, an EPSS score of `2.1%` falls into the `HIGH` risk band in this repository and forces manual review when the CVE is also `CRITICAL` or `HIGH`.
+EPSS is the estimated probability that a CVE will be exploited in the next 30 days. The percentage itself comes from FIRST EPSS. The labels below are not an official EPSS standard; they are repository-defined policy bands used only for promotion decisions in this project.
 
-| EPSS Score Range | Risk Level | Meaning | Action |
+For example, an EPSS score of `2.1%` means a modeled `2.1%` probability of exploitation within 30 days. In this repository, that score falls above the `2.0%` manual-review threshold, so a `CRITICAL` or `HIGH` CVE with that score requires manual approval.
+
+| EPSS Score Range | Repository Policy Band | Meaning | Action |
 |-------|--------|---------|--------|
 | `< 0.5%` | Low | Exploitation is currently unlikely at internet scale. | Normal patching cadence; does not block auto-promotion by itself. |
-| `0.5% to < 2.0%` | Medium | Elevated likelihood, but not yet a strong exploitation signal. | Prioritize patching soon; still auto-eligible if age and KEV checks are clear. |
-| `2.0% to < 10.0%` | High | Material probability of exploitation in the next 30 days. | Manual review required for CRITICAL/HIGH CVEs. |
+| `0.5% to < 2.0%` | Medium | Elevated likelihood, but below this repository's manual-review threshold. | Prioritize patching soon; still auto-eligible if age and KEV checks are clear. |
+| `2.0% to < 10.0%` | High | Above this repository's manual-review threshold. | Manual review required for CRITICAL/HIGH CVEs. |
 | `>= 10.0%` | Critical | Very high exploitation likelihood. | Treat as urgent; manual approval only for CRITICAL/HIGH CVEs. |
 
 ---
