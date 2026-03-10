@@ -4,13 +4,9 @@
 [![Image Promotion](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/image-promotion.yml)
 [![Re-Scan](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml/badge.svg)](https://github.com/svveec0d3/secure-deploy/actions/workflows/rescan.yml)
 
-Secure Deploy is a reference repository for securely ingesting, reviewing, promoting, and deploying vendor container images. This repository uses `n8nio/n8n` as the example workload, but the main purpose is to show how a promotion pipeline can combine policy, supply chain evidence, vulnerability context, runtime hardening, and operational controls.
-
-The central idea is simple: do not trust a vendor image tag just because it exists. Resolve the exact digest, evaluate its risk, decide whether it is auto-eligible or needs human approval, then publish a trusted image with release evidence and rollback information.
-
 ## Industry Framing
 
-When teams talk about CI/CD security and supply chain security, the same four references come up repeatedly, but they do different jobs.
+When teams design a secure CI/CD pipeline, a few industry references are commonly used together, but for different purposes.
 
 Think of them this way:
 
@@ -23,9 +19,20 @@ Think of them this way:
 - `NIST SP 800-204D` explains how software supply chain controls fit into a DevSecOps CI/CD architecture.
   The "How" for the pipeline design.
 
+Taken together, these references help answer different parts of the same question:
+
+- what can go wrong in CI/CD
+- what kinds of controls are expected
+- how build and artifact integrity can be strengthened
+- how those controls can be embedded into a DevSecOps delivery pipeline
+
 This repository should be read as a practical demonstration of some of those ideas, not as a full implementation of any one framework.
 
 ## What This Repository Demonstrates
+
+Secure Deploy is a reference repository for securely ingesting, reviewing, promoting, and deploying vendor container images. This repository uses `n8nio/n8n` as the example workload, but the main purpose is to show how a promotion pipeline can combine policy, supply chain evidence, vulnerability context, runtime hardening, and operational controls.
+
+The central idea is simple: do not trust a vendor image tag just because it exists. Resolve the exact digest, evaluate its risk, decide whether it is auto-eligible or needs human approval, then publish a trusted image with release evidence and rollback information.
 
 This repository currently does the following:
 
@@ -38,7 +45,7 @@ This repository currently does the following:
 - re-scans only the latest promoted release on a schedule
 - retains only the latest 3 promoted GitHub releases
 
-## 5W1H
+## Operating Context
 
 ### What
 
