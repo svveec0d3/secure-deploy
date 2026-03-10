@@ -11,6 +11,7 @@ REPORT_PATH="$2"
 OUTPUT_PATH="$3"
 WORK_DIR="$(mktemp -d)"
 PKG_LIST="$WORK_DIR/vulnerable-packages.txt"
+APK_AWK="$WORK_DIR/apk-installed.awk"
 
 cleanup() {
   rm -rf "$WORK_DIR"
@@ -18,6 +19,35 @@ cleanup() {
 trap cleanup EXIT
 
 jq -r '[.Results[]?.Vulnerabilities[]?.PkgName] | unique | map(select(length > 0)) | .[]' "$REPORT_PATH" > "$PKG_LIST"
+
+cat > "$APK_AWK" <<'EOF'
+BEGIN {
+  while ((getline line < "/workspace/vulnerable-packages.txt") > 0) {
+    wanted[line] = 1
+  }
+}
+/^P:/ {
+  pkg = substr($0, 3)
+  dir = ""
+  next
+}
+/^F:/ {
+  if (wanted[pkg]) {
+    dir = substr($0, 3)
+  }
+  next
+}
+/^R:/ {
+  if (wanted[pkg] && dir != "") {
+    print pkg "\t/" dir "/" substr($0, 3)
+  }
+  next
+}
+/^$/ {
+  pkg = ""
+  dir = ""
+}
+EOF
 
 if [ ! -s "$PKG_LIST" ]; then
   : > "$OUTPUT_PATH"
@@ -37,6 +67,8 @@ docker run --rm \
       while IFS= read -r pkg; do
         apk info -L "$pkg" 2>/dev/null | awk -v pkg="$pkg" '"'"'NF && $0 ~ "^/" {print pkg "\t" $0}'"'"' || true
       done < /workspace/vulnerable-packages.txt
+    elif [ -f /lib/apk/db/installed ]; then
+      awk -F: -f /workspace/apk-installed.awk /lib/apk/db/installed
     elif command -v rpm >/dev/null 2>&1; then
       while IFS= read -r pkg; do
         rpm -ql "$pkg" 2>/dev/null | awk -v pkg="$pkg" '"'"'NF && $0 ~ "^/" {print pkg "\t" $0}'"'"' || true
