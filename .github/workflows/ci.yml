@@ -14,7 +14,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: ShellCheck Scripts
         run: |
@@ -24,7 +24,7 @@ jobs:
           shellcheck iac/n8n/install.sh iac/n8n/upgrade.sh .github/scripts/*.sh
 
       - name: IaC Scan (Checkov)
-        uses: bridgecrewio/checkov-action@master
+        uses: bridgecrewio/checkov-action@2fd3901c8feb52417f27f0d9800259a106c1ec1e # master
         with:
           directory: iac/n8n
           quiet: true
@@ -82,7 +82,7 @@ jobs:
 
       - name: Upload IaC Scan Report (always available, even on failure)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-iac-report
           path: |
@@ -104,7 +104,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Trivy and jq
         run: |
@@ -167,7 +167,7 @@ jobs:
 
       - name: Upload Tracee integration artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tracee-reachability-integration
           path: |
@@ -185,7 +185,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install yq (YAML parser)
         run: |
@@ -379,7 +379,7 @@ jobs:
 
       - name: Upload CIS Compliance Report (always available, even on failure)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cis-compliance-report
           path: cis-compliance-report.txt
