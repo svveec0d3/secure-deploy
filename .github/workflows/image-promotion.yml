@@ -163,16 +163,12 @@ jobs:
 
       - name: Scan Image for Malware (ClamAV)
         run: |
-          echo "Installing ClamAV..."
-          sudo apt-get update -qq
-          sudo apt-get install -y clamav clamdscan > /dev/null
-          sudo freshclam > /dev/null
-          
           echo "Exporting image to tarball for deep scanning..."
           docker save n8nio/n8n:${{ env.N8N_VERSION }} -o image-for-clamav.tar
           
-          echo "Running ClamAV malware scan..."
-          clamscan --max-filesize=4000M --max-scansize=4000M -r image-for-clamav.tar || (echo "❌ Malware detected! Blocking promotion." && exit 1)
+          echo "Running ClamAV malware scan via Docker container..."
+          chmod 644 image-for-clamav.tar
+          docker run --rm -v $(pwd):/scandir clamav/clamav:latest clamscan --max-filesize=4000M --max-scansize=4000M -r /scandir/image-for-clamav.tar || (echo "❌ Malware detected! Blocking promotion." && exit 1)
           echo "✅ No malware detected."
 
       - name: Scan for CVEs (non-blocking report)
