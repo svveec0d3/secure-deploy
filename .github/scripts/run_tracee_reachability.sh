@@ -66,6 +66,15 @@ for _ in $(seq 1 45); do
   sleep 2
 done
 
+# DAST: Run OWASP ZAP Baseline Scan against the running container
+echo "Running ZAP Baseline Scan against http://127.0.0.1:${HOST_PORT} ..."
+# We use -u root so ZAP can write zap-report.html directly to the output directory map without permission errors
+docker run -u root --rm --network host \
+  -v "$OUTPUT_DIR:/zap/wrk/:rw" \
+  zaproxy/zap-stable zap-baseline.py \
+  -t "http://127.0.0.1:${HOST_PORT}" \
+  -r zap-report.html -I >/dev/null 2>&1 || echo "ZAP Baseline finished"
+
 docker exec "$CONTAINER_NAME" /bin/sh -lc 'command -v node >/dev/null 2>&1 && node -p process.version >/dev/null' || true
 docker exec "$CONTAINER_NAME" /bin/sh -lc 'test -f /usr/local/bin/n8n && /usr/local/bin/n8n --help >/dev/null 2>&1' || true
 

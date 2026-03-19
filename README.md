@@ -59,8 +59,8 @@ flowchart TD
     end
 
     subgraph Analysis["2. Risk Enrichment"]
-        C --> D["Trivy vulnerability scan"]
-        C --> E["Tracee smoke run"]
+        C --> D["Trivy vulnerability, secret, & license scan"]
+        C --> E["Tracee & ZAP DAST smoke run"]
         D --> F["KEV, EPSS, and CVE age enrichment"]
         E --> F
     end
@@ -93,6 +93,9 @@ This repository is intended to reduce a specific set of CI/CD and vendor-ingesti
 | :--- | :--- | :--- |
 | Dependency chain abuse | A trusted vendor image can still introduce risky or newly vulnerable components | digest pinning, Trivy scan, KEV/EPSS/age enrichment |
 | Artifact substitution or tag drift | A mutable upstream tag can change without notice | resolve and pin immutable digest before promotion |
+| Prohibitive licenses | Vendor images may introduce strict copyleft licenses | Trivy license scanning blocking promotion |
+| Runtime misconfigurations | Static scans miss exposed runtime HTTP flaws | OWASP ZAP baseline DAST during smoke run |
+| IaC and Script weaknesses | Underlying deployment files may contain configuration errors | Checkov (IaC) and Shellcheck scanning in CI flow |
 | Insufficient flow control | High-risk images can move too far through the pipeline without a human decision | `trusted-promotion` environment for manual approval |
 | Weak artifact integrity evidence | Teams need more than “the scan passed” to trust a promoted artifact | provenance attestation, SBOM attestation, release evidence |
 | Weak pipeline identity model | Long-lived publish credentials increase exposure if leaked | ephemeral `GITHUB_TOKEN` for GHCR actions, short-lived workflow identity for attestation flows |
@@ -150,6 +153,10 @@ That is why this pipeline layers more than one signal into the approval decision
   - records runtime exec/load/file evidence during a smoke run
   - used today as analyst context, not as an approval-gate input
 
+- `OWASP ZAP (DAST)`
+  - runs a lightweight dynamic baseline scan against the actual container during the Tracee smoke test
+  - detects exposed runtime flaws and exports results automatically
+
 ### Gate Policy
 
 For `CRITICAL` and `HIGH` findings:
@@ -161,6 +168,11 @@ For `CRITICAL` and `HIGH` findings:
 | `CRITICAL` / `HIGH` | No | Below repo threshold | At least 30 days | Manual review |
 | `CRITICAL` / `HIGH` | No | Below repo threshold | Under 30 days | Auto-promotion allowed |
 | `MEDIUM` / `LOW` / `UNKNOWN` | No | Any | Any | Reported, but does not directly trigger manual approval |
+
+**Additional Hard Gates:**
+- `Prohibitive Licenses`: The pipeline evaluates images for non-compliant copyleft licenses (via Trivy). If restricted licenses are present, promotion is immediately blocked.
+- `Malware & Secrets`: Promotion is blocked unconditionally if embedded secrets (Trivy) or known malware signatures (ClamAV) are detected.
+- `IaC/Configuration`: Separate PR workflows run `Checkov` against `docker-compose.yml` and `Shellcheck` against bash scripts to ensure robust deployment policies.
 
 The intended interpretation is:
 

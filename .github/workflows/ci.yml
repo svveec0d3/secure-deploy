@@ -16,6 +16,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: ShellCheck Scripts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck > /dev/null
+          echo "Running ShellCheck on bash scripts..."
+          shellcheck iac/n8n/install.sh iac/n8n/upgrade.sh .github/scripts/*.sh
+
+      - name: IaC Scan (Checkov)
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: iac/n8n
+          framework: dockerfile,dockercompose
+          quiet: true
+          soft_fail: false
+
       - name: Install Trivy
         run: |
           sudo apt-get update

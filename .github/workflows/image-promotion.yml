@@ -171,6 +171,15 @@ jobs:
           docker run --rm -v $(pwd):/scandir clamav/clamav:latest clamscan --max-filesize=4000M --max-scansize=4000M -r /scandir/image-for-clamav.tar || (echo "❌ Malware detected! Blocking promotion." && exit 1)
           echo "✅ No malware detected."
 
+      - name: Scan Image for License Compliance
+        run: |
+          trivy image \
+            --format table \
+            --scanners license \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            n8nio/n8n:${{ env.N8N_VERSION }} || (echo "❌ Prohibitive licenses detected! Blocking promotion." && exit 1)
+
       - name: Scan for CVEs (non-blocking report)
         run: |
           # Scan ALL severities so KEV can cross-reference Medium/Low CVEs too
