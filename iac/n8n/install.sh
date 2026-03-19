@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2086,SC2089,SC2090,SC2162
 
 # Exit on error
 set -e

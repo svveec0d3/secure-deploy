@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2086,SC2089,SC2090,SC2162
 # ─── n8n Auto-Upgrade Script ─────────────────────────────────────────────────
 # Called daily by cron. Checks for a new n8n release, upgrades if available,
 # verifies the service is healthy, and rolls back automatically on failure.

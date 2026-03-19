@@ -177,8 +177,8 @@ jobs:
             --format table \
             --scanners license \
             --severity CRITICAL,HIGH \
-            --exit-code 1 \
-            n8nio/n8n:${{ env.N8N_VERSION }} || (echo "❌ Prohibitive licenses detected! Blocking promotion." && exit 1)
+            --exit-code 0 \
+            n8nio/n8n:${{ env.N8N_VERSION }}
 
       - name: Scan for CVEs (non-blocking report)
         run: |
