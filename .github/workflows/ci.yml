@@ -27,7 +27,8 @@ jobs:
         uses: bridgecrewio/checkov-action@master
         with:
           directory: iac/n8n
-        framework: dockerfile,yaml
+                framework: dockerfile,yaml
+                        quiet: true
           soft_fail: false
 
       - name: Install Trivy
