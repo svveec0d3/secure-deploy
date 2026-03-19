@@ -101,6 +101,8 @@ This repository is intended to reduce a specific set of CI/CD and vendor-ingesti
 | Weak pipeline identity model | Long-lived publish credentials increase exposure if leaked | ephemeral `GITHUB_TOKEN` for GHCR actions, short-lived workflow identity for attestation flows |
 | Insufficient day-2 monitoring | A previously accepted image can later become more urgent | weekly re-scan of the latest promoted release |
 | Runtime over-privilege | A promoted image can still be dangerous if it runs with too much privilege | Docker runtime hardening in `iac/n8n` |
+| Action/Workflow Poisoning | An upstream GitHub Action tag could be hijacked (Supply Chain) | strict commit SHA pinning across all workflows |
+| Vendor Identity Impersonation | A valid signature could belong to an attacker, not the vendor | strict Cosign OIDC-issuer and identity enforcement |
 
 This means the repository is not only “a scanner pipeline.” It is an attempt to treat vendor image ingestion as a CI/CD and supply-chain trust problem.
 
@@ -230,6 +232,7 @@ Current model:
 - GHCR authentication uses the repository-scoped ephemeral `GITHUB_TOKEN`
 - attestation flows use GitHub Actions `id-token: write`
 - build provenance and SBOM attestation are produced in the GitHub Actions promotion path
+- all GitHub Actions workflow steps are strictly pinned to immutable commit SHAs to prevent upstream injection over mutable tags
 
 In practical terms:
 
@@ -360,11 +363,7 @@ Current artifact choices:
 
 - SBOM format: `SPDX JSON`
 - provenance: GitHub build provenance and attestation flow
-
-Forward-looking gap:
-
-- `VEX` is not emitted today
-- adding VEX would be a logical next step if the project wants to move from “vulnerabilities listed” toward “exploitability and affectedness stated more explicitly”
+- exploitability: `OpenVEX` JSON document automatically generated to silence unreachable or low-risk CVEs
 
 ## Repository Structure
 
